@@ -41,6 +41,10 @@ def load(p, d=None):
     except Exception: return d
 
 meta = load(path("meta.json"), {})
+DATA_VER = 2   # 올리면 긴 기간 차트(주봉·전체 일봉)를 한 번 다시 받음
+if meta.get("ver") != DATA_VER:
+    meta = {k: v for k, v in meta.items() if not k.startswith(("w:", "h:", "fgh"))}
+    meta["ver"] = DATA_VER
 def stale(key, sec): return NOW - meta.get(key, 0) > sec
 def mark(key): meta[key] = int(NOW)
 def is_kr(s): return s.endswith(".KS") or s.endswith(".KQ")
@@ -78,13 +82,19 @@ def cash(v, kr): return f"{v:,.0f}원" if kr else "$" + f2(v)
 
 # ───────── Yahoo ─────────
 def chart(sym, rng, iv):
-    r = get(f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?range={rng}&interval={iv}&includePrePost=false")
+    # range=max 로 부르면 Yahoo가 일봉·주봉 대신 월봉·분기봉을 줄 때가 있어서, 긴 기간은 시작~끝 날짜로 요청
+    span = {"max": None, "10y": 3653, "5y": 1827}.get(rng, -1)
+    q = f"range={rng}" if span == -1 else f"period1={-2208988800 if span is None else int(NOW - span * 86400)}&period2={int(NOW) + 86400}"
+    r = get(f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?{q}&interval={iv}&includePrePost=false")
     if not r or r.status_code != 200: return None
     try: res = r.json()["chart"]["result"][0]
     except Exception: return None
     m = res.get("meta", {})
     ts = res.get("timestamp") or []
     cl = ((res.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+    gaps = sorted(b - a for a, b in zip(ts, ts[1:]))
+    want = {"1d": 4, "1wk": 10}.get(iv)
+    if want and gaps and gaps[len(gaps) // 2] > want * 86400: return None   # 월봉 등으로 바뀌어 온 데이터는 버림
     t, c = [], []
     for a, b in zip(ts, cl):
         if b is not None: t.append(a); c.append(rnd(b))
@@ -502,7 +512,7 @@ def main():
             c = chart(sym, "2y", "1d")
             if c: save(path("c", f + ".d.json"), c); mark("d:" + sym)
         if stale("w:" + sym, 20 * 3600) or not os.path.exists(path("c", f + ".w.json")):
-            c = chart(sym, "max", "1wk")
+            c = chart(sym, "10y", "1wk")
             if c: save(path("c", f + ".w.json"), c); mark("w:" + sym)
     with ThreadPoolExecutor(6) as ex: list(ex.map(do_chart, chart_syms + ["^GSPC", "^IXIC", "^KS11", "^VIX"]))
     # 목록용 미니 차트·1개월 수익률: 최근 1개월 일봉 종가 (안드로이드 목록과 같은 기준)

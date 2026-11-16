@@ -82,7 +82,9 @@ const Y = {
     }
     // 목록에 없던 종목 → 공용 중계 서버로 직접
     try {
-      const j = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${interval}&includePrePost=false`);
+      // range=max 는 Yahoo가 월봉·분기봉으로 바꿔 줄 때가 있어 시작~끝 날짜로 요청
+      const span = range === "max" ? `period1=-2208988800&period2=${Math.floor(Date.now() / 1000) + 86400}` : `range=${range}`;
+      const j = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?${span}&interval=${interval}&includePrePost=false`);
       const r = j.chart.result[0], ts = r.timestamp || [], cl = r.indicators?.quote?.[0]?.close || [];
       const t = [], c = []; ts.forEach((x, i) => { if (cl[i] != null) { t.push(x); c.push(cl[i]); } });
       return fromStatic(sym, { t, c, m: { price: r.meta.regularMarketPrice, prev: r.meta.chartPreviousClose, name: r.meta.longName || r.meta.shortName, h52: r.meta.fiftyTwoWeekHigh, l52: r.meta.fiftyTwoWeekLow } }, interval);
