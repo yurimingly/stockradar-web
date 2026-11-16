@@ -91,6 +91,7 @@ const Y = {
   async quotes(syms) {
     const j = await data("quotes.json", 60_000);
     const out = {};
+    if (j?.rate) RATE = j.rate;
     if (j?.q) { Q._at = j.at; for (const s of syms) if (j.q[s]) out[s] = { ...j.q[s], name: j.q[s].name || j.q[s].sname }; }
     const miss = syms.filter(s => !out[s]);
     await Promise.all(miss.slice(0, 20).map(async s => {
@@ -171,7 +172,7 @@ function route() {
   if (!h) return { name: "home" };
   const [a, ...rest] = h.split("/");
   if (a === "s") return { name: "detail", sym: decodeURIComponent(rest.join("/")) };
-  return { name: a };
+  return { name: a, args: rest };
 }
 function go(path) { location.hash = "#/" + path; }
 window.addEventListener("hashchange", render);
@@ -184,23 +185,6 @@ function setHeader(title, back) {
 $("#backBtn").onclick = () => history.length > 1 ? history.back() : go("");
 $("#refreshBtn").onclick = () => { quotesAt = 0; render(true); toast("새로고침"); };
 
-function drawer(open) {
-  $("#drawer").classList.toggle("hidden", !open); $("#drawerBg").classList.toggle("hidden", !open);
-  if (!open) return;
-  const secs = S.sectors.map((s, i) => `<a class="item" data-sec="${i}">${esc(s.emoji)} ${esc(s.name)}</a>`).join("");
-  $("#drawer").innerHTML = `
-    <div class="grp">보기</div><a class="item" href="#/">🏠 홈 (전체 섹터)</a>${secs}
-    <div class="grp">공부하기</div>
-    <a class="item" href="#/signals">🚦 매수 타이밍 신호 (공포지수·VIX·RSI)</a>
-    <div class="grp">관리</div>
-    <a class="item" data-add="1">➕ 종목 추가 (섹터 자동 분류)</a>
-    <a class="item" href="#/settings">⚙️ 설정</a>`;
-  $("#drawer").querySelectorAll("a").forEach(a => a.addEventListener("click", () => {
-    drawer(false);
-    if (a.dataset.sec != null) { if (route().name !== "home") { go(""); setTimeout(() => scrollToSec(+a.dataset.sec), 300); } else scrollToSec(+a.dataset.sec); }
-    if (a.dataset.add) addStockSheet(-1);
-  }));
-}
 $("#menuBtn").onclick = () => drawer(true);
 $("#drawerBg").onclick = () => drawer(false);
 
@@ -211,87 +195,10 @@ function sheet(html, onMount) {
 function closeSheet() { $("#sheet").classList.add("hidden"); $("#sheetBg").classList.add("hidden"); }
 $("#sheetBg").onclick = closeSheet;
 
-async function render(force) {
-  const r = route();
-  LS.set("lastHash", location.hash);
-  window.scrollTo(0, 0);
-  if (r.name === "home") return renderHome(false, force);
-  if (r.name === "detail") return renderDetail(r.sym, force);
-  if (r.name === "signals") return renderSignals(force);
-  if (r.name === "settings") return renderSettings();
-  go("");
-}
-
 // ───────────── 홈 ─────────────
-function scrollToSec(i) {
-  const el = document.getElementById("sec" + i);
-  if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 64, behavior: "smooth" });
-}
-function sortList(list) {
-  const k = S.sort;
-  return [...list].sort((a, b) => {
-    const qa = Q[a.t] || {}, qb = Q[b.t] || {};
-    if (k === "cap") return (qb.cap || 0) - (qa.cap || 0);
-    if (k === "up") return (qb.pct ?? -999) - (qa.pct ?? -999);
-    if (k === "down") return (qa.pct ?? 999) - (qb.pct ?? 999);
-    if (k === "vol") return ((qb.vol || 0) * (qb.price || 0)) - ((qa.vol || 0) * (qa.price || 0));
-    return 0;
-  });
-}
-function stockRow(st) {
-  const q = Q[st.t];
-  const fav = S.favs.has(st.t) ? "★ " : "";
-  let ext = "";
-  if (q && !isKr(st.t)) {
-    if (q.state && q.state.startsWith("PRE") && q.pre) ext = `<div class="tk">프리 ${money(q.pre, st.t)} <span class="${cls(q.prePct)}">${pct(q.prePct)}</span></div>`;
-    else if (q.state && (q.state.startsWith("POST") || q.state === "CLOSED") && q.post) ext = `<div class="tk">애프터 ${money(q.post, st.t)} <span class="${cls(q.postPct)}">${pct(q.postPct)}</span></div>`;
-  }
-  return `<div class="stock" data-sym="${esc(st.t)}">
-    <div class="grow" style="min-width:0"><div class="nm">${fav}${esc(st.ko)}</div><div class="tk">${esc(st.t)}${q?.cap ? " · " + big(q.cap, st.t) : ""}${st.etf ? " · ETF" : ""}</div></div>
-    <div><div class="px">${q ? money(q.price, st.t) : "…"}</div><div class="pc ${cls(q?.pct)}">${q ? pct(q.pct) : ""}</div>${ext}</div>
-  </div>`;
-}
-function renderHome(quotesOnly, force) {
-  setHeader("StockRadar", false);
-  const sortNames = { cap: "시총순", up: "상승률", down: "하락률", vol: "거래대금", none: "기본" };
-  const favs = S.sectors.flatMap(s => s.stocks).filter((x, i, a) => S.favs.has(x.t) && a.findIndex(y => y.t === x.t) === i);
-  let html = `<div class="chips" id="secChips">${S.sectors.map((s, i) => `<button class="chip" data-sec="${i}">${esc(s.emoji)} ${esc(s.name)}</button>`).join("")}</div>
-    <div class="chips" style="margin:6px 0 4px">${Object.entries(sortNames).map(([k, v]) => `<button class="chip sm ${S.sort === k ? "on" : ""}" data-sort="${k}">${v}</button>`).join("")}</div>`;
-  if (favs.length) html += `<div class="sec">★ 관심 종목</div><div class="card">${sortList(favs).map(stockRow).join("")}</div>`;
-  S.sectors.forEach((s, i) => {
-    const us = sortList(s.stocks.filter(x => !isKr(x.t))), kr = sortList(s.stocks.filter(x => isKr(x.t)));
-    html += `<div class="between" id="sec${i}"><div class="sec">${esc(s.emoji)} ${esc(s.name)} <span class="muted small">${s.stocks.length}</span></div>
-      <button class="chip sm" data-add="${i}">＋ 추가</button></div><div class="card">`;
-    if (us.length && kr.length) html += `<div class="flag">🇺🇸 미국</div>`;
-    html += us.map(stockRow).join("");
-    if (kr.length) html += (us.length ? `<div class="flag">🇰🇷 한국</div>` : "") + kr.map(stockRow).join("");
-    html += `</div>`;
-  });
-  html += `<div class="sub" style="text-align:center;margin-top:10px">${Q._at ? "시세 기준: " + ago(Q._at) + " (약 20분마다 갱신)" : "시세 불러오는 중…"}</div>`;
-  const y = window.scrollY;
-  $("#app").innerHTML = html;
-  if (quotesOnly) window.scrollTo(0, y);
-  $("#app").querySelectorAll("[data-sym]").forEach(el => el.onclick = () => go("s/" + encodeURIComponent(el.dataset.sym)));
-  $("#app").querySelectorAll("[data-sec]").forEach(el => el.onclick = () => scrollToSec(+el.dataset.sec));
-  $("#app").querySelectorAll("[data-sort]").forEach(el => el.onclick = () => { S.sort = el.dataset.sort; S.save(); renderHome(true); });
-  $("#app").querySelectorAll("[data-add]").forEach(el => el.onclick = () => addStockSheet(+el.dataset.add));
-  if (!quotesOnly) refreshQuotes(force);
-}
 setInterval(() => { if (route().name === "home" && !document.hidden) refreshQuotes(false); }, 60_000);
 
 // ───────────── 종목 추가 (여러 개 선택) ─────────────
-const SECTOR_HINTS = [
-  ["양자컴퓨팅", /quantum/i], ["사이버보안", /security|cyber|software—infrastructure/i], ["생명과학", /biotech|drug|pharma|medical|health|diagnos/i],
-  ["AI·반도체", /semiconductor/i], ["우주항공", /aerospace|space/i], ["원자력·전력", /utilit|uranium|nuclear|electric/i],
-  ["로봇·자율주행", /robot|automation|machinery/i], ["핀테크·디지털자산", /credit|capital markets|financial|payment|bank/i],
-  ["화장품·뷰티", /household|personal products|cosmetic/i], ["클린에너지·ESS", /solar|renewable|battery/i], ["AI 소프트웨어", /software/i]
-];
-function guessSector(hit, summ) {
-  if (hit.etf) return S.sectors.findIndex(s => s.name === "대표 ETF");
-  const text = [summ?.assetProfile?.industry, summ?.assetProfile?.sector, hit.name].join(" ");
-  for (const [name, re] of SECTOR_HINTS) if (re.test(text)) { const i = S.sectors.findIndex(s => s.name === name); if (i >= 0) return i; }
-  return -1;
-}
 function addStockSheet(secIdx) {
   const auto = secIdx < 0;
   const sel = new Map();
@@ -309,16 +216,26 @@ function addStockSheet(secIdx) {
       $("#hits", el).innerHTML = `<div class="spin">검색 중…</div>`;
       const terms = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
       const cat = [...allStocks().values()];
-      const res = [];
+      const res = []; let noteMsg = "";
       for (const t of terms) {
-        const local = cat.filter(x => x.ko.toLowerCase().includes(t.toLowerCase()) || x.t.toLowerCase() === t.toLowerCase())
-          .map(x => ({ sym: x.t, name: x.ko, etf: x.etf, exch: isKr(x.t) ? "KRX" : "", ko: x.ko }));
-        const remote = await Y.search(t);
+        const key = t.replace(/\s/g, "").toLowerCase();
+        const local = cat.filter(x => x.ko.replace(/\s/g, "").toLowerCase().includes(key) || x.t.toLowerCase() === t.toLowerCase())
+          .map(x => ({ sym: x.t, name: x.ko, etf: x.etf, exch: "앱 추천 목록", ko: x.ko }));
+        let remote = [];
+        if (!/[가-힣]/.test(t)) remote = await Y.search(t);
+        else if (!local.length) {
+          // 한글 이름 → AI가 영문 회사명·티커로 바꾼 뒤 Yahoo에서 확인 (안드로이드와 같은 방식)
+          if (!LS.get("gemFree", "")) { noteMsg = "한글 이름 검색은 설정에 Gemini 무료 키가 필요해요. 영어 이름이나 티커로 찾아보세요."; }
+          else for (const [tk, nm] of await aiLookup(t)) {
+            const found = [...(tk ? await Y.search(tk) : []), ...(nm ? await Y.search(nm) : [])].sort((a, b) => (a.sym === tk ? 0 : 1) - (b.sym === tk ? 0 : 1));
+            found.forEach(h => remote.some(r => r.sym === h.sym) || remote.push({ ...h, ko: t }));
+          }
+        }
         const merged = [...local, ...remote.filter(r => !local.some(l => l.sym === r.sym))].slice(0, terms.length > 1 ? 3 : 15);
         res.push(...merged);
       }
       const uniq = res.filter((x, i) => res.findIndex(y => y.sym === x.sym) === i);
-      if (!uniq.length) { $("#hits", el).innerHTML = `<div class="spin">결과가 없어요. 영어 이름이나 티커로도 찾아보세요.</div>`; return; }
+      if (!uniq.length) { $("#hits", el).innerHTML = `<div class="spin">${noteMsg || "결과가 없어요. 영어 이름이나 티커로도 찾아보세요."}</div>`; return; }
       $("#hits", el).innerHTML = uniq.map(h => {
         const have = exists(h.sym), on = sel.has(h.sym);
         return `<div class="hit" data-h="${esc(h.sym)}" style="${have ? "opacity:.5" : ""}"><div class="grow"><div class="b">${esc(h.ko || h.name)}</div><div class="sub">${esc(h.sym)} ${esc(h.exch || "")}${h.etf ? " · ETF" : ""}</div></div>
@@ -336,17 +253,14 @@ function addStockSheet(secIdx) {
       const msgs = [];
       for (const h of list) {
         let idx = secIdx;
-        if (auto) {
-          idx = guessSector(h, await Y.summary(h.sym));
-          if (idx < 0) { idx = S.sectors.findIndex(s => s.name === "내 종목"); if (idx < 0) { S.sectors.push({ name: "내 종목", emoji: "📁", stocks: [] }); idx = S.sectors.length - 1; } }
-        }
+        if (auto) idx = await suggestSector(h.sym, h.ko || h.name, h.etf);
         const known = allStocks().get(h.sym);
         S.sectors[idx].stocks.push(known || { t: h.sym, ko: h.ko || h.name, desc: "", pts: [], etf: !!h.etf });
         S.deleted.delete(S.sectors[idx].name + ":" + h.sym);
         msgs.push(auto ? `${h.sym}→${S.sectors[idx].name}` : h.sym);
       }
       S.save(); toast("추가: " + msgs.join(", ")); quotesAt = 0; search();
-      if (route().name === "home") renderHome(false);
+      if (route().name === "home") renderHome(true);
     };
     setTimeout(() => $("#q", el).focus(), 100);
   });
@@ -543,141 +457,6 @@ function digestHtml(d) {
 }
 
 // ───────────── 종목 상세 ─────────────
-const RANGES = [["1일", "1d", "5m"], ["5일", "5d", "30m"], ["1개월", "1mo", "1d"], ["6개월", "6mo", "1d"], ["1년", "1y", "1d"], ["5년", "5y", "1wk"], ["전체", "max", "1mo"]];
-async function renderDetail(sym) {
-  const st = findStock(sym);
-  setHeader(st.ko || sym, true);
-  const fav = S.favs.has(sym);
-  $("#app").innerHTML = `
-    <div class="between"><div><div class="muted small">${esc(sym)}${st.etf ? " · ETF" : ""}</div><div class="big" id="dPrice">…</div><div id="dChg" class="b"></div><div id="dExt" class="small"></div></div>
-      <button class="chip" id="favBtn">${fav ? "★ 관심" : "☆ 관심"}</button></div>
-    <div class="card" style="margin-top:10px"><div id="cInfo" class="sub" style="min-height:18px">차트를 손가락으로 밀면 그날 가격이 나와요</div><canvas class="chart" id="cv"></canvas>
-      <div class="ranges">${RANGES.map((r, i) => `<button data-r="${i}" class="${i === LS.get("range", 4) ? "on" : ""}">${r[0]}</button>`).join("")}</div></div>
-    <div class="card" id="dToday"></div>
-    ${st.desc || st.pts?.length ? `<div class="sec">📌 핵심 포인트</div><div class="card">${st.desc ? `<div class="b" style="margin-bottom:6px">${esc(st.desc)}</div>` : ""}${(st.pts || []).map(p => `<div class="small" style="margin-top:3px">• ${esc(p)}</div>`).join("")}</div>` : ""}
-    <div class="sec">📂 담긴 섹터</div><div class="card" id="dSecs"></div>
-    <div class="sec">📝 메모</div><div class="card"><textarea id="memo" placeholder="이 종목에 대한 내 생각, 매수 이유, 목표가…">${esc(S.memos[sym] || "")}</textarea></div>
-    <div class="sec">🚦 매수 타이밍 신호</div><div class="card" id="dSig"><div class="spin">계산 중…</div></div>
-    <div class="sec">📊 주요 지표</div><div class="card" id="dMetrics"><div class="spin">불러오는 중…</div></div>
-    <div id="dHold"></div>
-    <div class="between"><div class="sec">🤖 AI 뉴스 요약</div><button class="chip sm" id="aiRe">다시 요약</button></div><div class="card" id="dAI"><div class="spin">뉴스 모으는 중…</div></div>
-    <div class="sec">📰 뉴스</div><div class="chips" id="newsTabs"></div><div class="card" id="dNews"><div class="spin">불러오는 중…</div></div>
-    <div class="sec">🔗 링크</div><div class="card">
-      <a class="link" target="_blank" href="https://finance.yahoo.com/quote/${encodeURIComponent(sym)}">Yahoo Finance ›</a><br>
-      ${isKr(sym) ? `<a class="link" target="_blank" href="https://m.stock.naver.com/domestic/stock/${sym.split(".")[0]}/total">네이버 증권 ›</a>` : `<a class="link" target="_blank" href="https://www.tradingview.com/symbols/${sym}/">TradingView ›</a>`}</div>`;
-  $("#favBtn").onclick = () => { S.favs.has(sym) ? S.favs.delete(sym) : S.favs.add(sym); S.save(); $("#favBtn").textContent = S.favs.has(sym) ? "★ 관심" : "☆ 관심"; };
-  $("#memo").oninput = e => { S.memos[sym] = e.target.value; S.save(); };
-  const drawSecs = () => {
-    const ins = S.sectors.map((s, i) => [s, i]).filter(([s]) => s.stocks.some(x => x.t === sym));
-    $("#dSecs").innerHTML = (ins.length ? ins.map(([s, i]) => `<div class="between" style="padding:6px 0"><span>${esc(s.emoji)} ${esc(s.name)}</span><button class="chip sm" data-rm="${i}">빼기 ✕</button></div>`).join("")
-      : `<div class="sub">아직 어떤 섹터에도 없어요.</div>`) + `<div class="chips" style="margin-top:8px">${S.sectors.map((s, i) => ins.some(([, j]) => j === i) ? "" : `<button class="chip sm" data-addto="${i}">＋ ${esc(s.name)}</button>`).join("")}</div>`;
-    $("#dSecs").querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { const s = S.sectors[+b.dataset.rm]; s.stocks = s.stocks.filter(x => x.t !== sym); S.deleted.add(s.name + ":" + sym); S.save(); toast(s.name + "에서 뺐어요"); drawSecs(); });
-    $("#dSecs").querySelectorAll("[data-addto]").forEach(b => b.onclick = () => { const s = S.sectors[+b.dataset.addto]; s.stocks.push({ ...st, t: sym, ko: st.ko || Q[sym]?.name || sym }); S.deleted.delete(s.name + ":" + sym); S.save(); toast(s.name + "에 담았어요"); drawSecs(); });
-  };
-  drawSecs();
-
-  // 시세
-  const q = (await Y.quotes([sym]))[sym]; if (q) Q[sym] = q;
-  const qq = Q[sym];
-  if (qq) {
-    $("#dPrice").textContent = money(qq.price, sym);
-    $("#dChg").innerHTML = `<span class="${cls(qq.pct)}">${qq.chg != null ? (qq.chg > 0 ? "+" : qq.chg < 0 ? "-" : "") + money(Math.abs(qq.chg), sym) : ""} (${pct(qq.pct)})</span>`;
-    if (!isKr(sym)) {
-      if (qq.pre && qq.state?.startsWith("PRE")) $("#dExt").innerHTML = `프리마켓 ${money(qq.pre, sym)} <span class="${cls(qq.prePct)}">${pct(qq.prePct)}</span>`;
-      else if (qq.post) $("#dExt").innerHTML = `애프터마켓 ${money(qq.post, sym)} <span class="${cls(qq.postPct)}">${pct(qq.postPct)}</span>`;
-    }
-    $("#dToday").innerHTML = `<div class="kv"><span class="k">시가총액</span><span class="v">${big(qq.cap, sym)}</span></div>
-      <div class="kv"><span class="k">52주 최저 / 최고</span><span class="v">${money(qq.low52, sym)} / ${money(qq.high52, sym)}</span></div>
-      ${qq.high52 ? `<div class="kv"><span class="k">52주 최고가 대비</span><span class="v ${cls(qq.price / qq.high52 - 1)}">${pct((qq.price / qq.high52 - 1) * 100)}</span></div>` : ""}`;
-  } else $("#dToday").innerHTML = `<div class="sub">시세를 불러오지 못했어요.</div>`;
-
-  // 차트
-  const loadRange = async i => {
-    LS.set("range", i);
-    $("#app").querySelectorAll("[data-r]").forEach(b => b.classList.toggle("on", +b.dataset.r === i));
-    const [, range, iv] = RANGES[i];
-    const d = await Y.chart(sym, range, iv);
-    if (!d) { $("#cInfo").textContent = "차트를 불러오지 못했어요"; return; }
-    d.intraday = iv.endsWith("m");
-    const chg = (d.closes[d.closes.length - 1] / (i === 0 ? d.base : d.closes[0]) - 1) * 100;
-    $("#cInfo").innerHTML = `${RANGES[i][0]} 수익률 <b class="${cls(chg)}">${pct(chg)}</b> · 손가락으로 밀어보세요`;
-    priceChart($("#cv"), d, sym, $("#cInfo"));
-  };
-  $("#app").querySelectorAll("[data-r]").forEach(b => b.onclick = () => loadRange(+b.dataset.r));
-  loadRange(LS.get("range", 4));
-
-  // 신호
-  Promise.all([Y.chart(sym, "1y", "1d"), Y.chart(sym, "5y", "1wk")]).then(([d, w]) => {
-    const list = Sig.price(d, w, st.etf || sym.startsWith("^"), sym);
-    $("#dSig").innerHTML = list.length ? sigSummary(list) + list.map(sigRow).join("") + `<a class="link" href="#/signals">시장 전체 신호(공포지수·VIX) 보기 ›</a>` : `<div class="sub">차트 데이터가 부족해 계산할 수 없어요.</div>`;
-  });
-
-  // 지표
-  Y.summary(sym).then(sm => renderMetrics(sym, st, sm));
-
-  // 뉴스
-  const pre = await data(`n/${fname(sym)}.json`, 600_000);
-  const tabs = [["국내", async () => pre?.ko?.length ? pre.ko : newsSearch((st.ko && st.ko !== sym ? st.ko.replace(/\(.*\)/, "").trim() : sym) + " 주가")],
-    ...(isKr(sym) ? [] : [["해외", async () => pre?.en?.length ? pre.en : newsSearch((qq?.name || sym) + " stock", true)]]),
-    ["🔍 기업분석", async () => pre?.an?.length ? pre.an : newsSearch((st.ko || sym).replace(/\(.*\)/, "").trim() + " 기업분석")]];
-  const runAI = async force => {
-    $("#dAI").innerHTML = `<div class="spin">AI가 최근 뉴스를 읽는 중… (10초쯤)</div>`;
-    try {
-      const all = [...(await tabs[0][1]()), ...(tabs.length > 2 ? await tabs[1][1]() : [])];
-      const d = await AI.digest(st, sym, all, force);
-      $("#dAI").innerHTML = digestHtml(d) + `<div class="sub" style="margin-top:10px">AI가 기사 제목을 정리한 거라 틀릴 수 있어요. 중요한 건 원문을 확인하세요.</div>`;
-    } catch (e) {
-      $("#dAI").innerHTML = `<div class="small">${esc(e.msg || "요약 실패")}</div>` + (e.code === -1 ? `<a class="link" href="#/settings">Gemini 키 넣으러 가기 ›</a>` : "");
-    }
-  };
-  $("#aiRe").onclick = () => runAI(true);
-  runAI(false);
-  let nt = 0;
-  const loadNews = async () => {
-    $("#newsTabs").innerHTML = tabs.map((t, i) => `<button class="chip ${i === nt ? "on" : ""}" data-n="${i}">${t[0]}</button>`).join("");
-    $("#newsTabs").querySelectorAll("[data-n]").forEach(b => b.onclick = () => { nt = +b.dataset.n; loadNews(); });
-    $("#dNews").innerHTML = `<div class="spin">불러오는 중…</div>`;
-    const list = await tabs[nt][1]();
-    $("#dNews").innerHTML = list.length ? list.slice(0, 12).map(n => `<a class="news" target="_blank" href="${esc(n.link)}"><div class="t">${esc(n.title)}</div><div class="m">${esc(n.src)} · ${n.time ? ago(n.time) : ""}</div></a>`).join("") : `<div class="sub">뉴스가 없어요.</div>`;
-  };
-  loadNews();
-}
-
-function raw(o) { return o?.raw ?? (typeof o === "number" ? o : null); }
-function renderMetrics(sym, st, sm) {
-  if (!sm) { $("#dMetrics").innerHTML = `<div class="sub">지표를 불러오지 못했어요.</div>`; return; }
-  const sd = sm.summaryDetail || {}, ks = sm.defaultKeyStatistics || {}, fd = sm.financialData || {}, pr = sm.price || {};
-  const P = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
-  const N = (v, d = 1) => v == null ? "—" : v.toFixed(d);
-  let rows;
-  if (st.etf || pr.quoteType === "ETF") {
-    rows = [["총보수", P(raw(ks.annualReportExpenseRatio) ?? raw(sm.fundProfile?.feesExpensesInvestment?.annualReportExpenseRatio))],
-      ["배당수익률", P(raw(sd.yield) ?? raw(sd.trailingAnnualDividendYield))], ["운용 규모", big(raw(sd.totalAssets), sym)],
-      ["올해 수익률", P(raw(ks.ytdReturn))], ["3년 평균 수익률", P(raw(ks.threeYearAverageReturn))], ["5년 평균 수익률", P(raw(ks.fiveYearAverageReturn))], ["베타(3년)", N(raw(ks.beta3Year), 2)]];
-  } else {
-    const pe = raw(sd.trailingPE), fpe = raw(sd.forwardPE) ?? raw(ks.forwardPE);
-    rows = [["PER (주가÷1년 이익)", pe == null ? (raw(ks.trailingEps) < 0 ? "적자" : "—") : N(pe)], ["선행 PER (내년 예상 이익 기준)", N(fpe)],
-      ["PBR (주가÷순자산)", N(raw(ks.priceToBook), 2)], ["PSR (시총÷매출)", N(raw(sd.priceToSalesTrailing12Months), 2)],
-      ["EV/EBITDA", N(raw(ks.enterpriseToEbitda))], ["PEG (PER÷성장률)", N(raw(ks.pegRatio), 2)],
-      ["매출 성장률 (전년비)", P(raw(fd.revenueGrowth))], ["영업이익률", P(raw(fd.operatingMargins))], ["순이익률", P(raw(fd.profitMargins))],
-      ["ROE (자본 대비 이익)", P(raw(fd.returnOnEquity))], ["부채비율 (부채÷자본)", raw(fd.debtToEquity) == null ? "—" : raw(fd.debtToEquity).toFixed(0) + "%"],
-      ["배당수익률", P(raw(sd.dividendYield) ?? raw(sd.trailingAnnualDividendYield))], ["베타 (시장 대비 변동)", N(raw(sd.beta), 2)],
-      ["목표주가 (애널리스트 평균)", raw(fd.targetMeanPrice) ? money(raw(fd.targetMeanPrice), sym) + ` (${fd.recommendationKey || ""})` : "—"]];
-  }
-  $("#dMetrics").innerHTML = rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join("") +
-    (sm.assetProfile?.industry ? `<div class="sub" style="margin-top:8px">업종: ${esc(sm.assetProfile.sector || "")} · ${esc(sm.assetProfile.industry)}</div>` : "");
-  const hs = sm.topHoldings?.holdings || [];
-  if (hs.length) {
-    const mx = Math.max(...hs.map(h => raw(h.holdingPercent) || 0)) || 1;
-    const sum = hs.reduce((a, h) => a + (raw(h.holdingPercent) || 0), 0);
-    $("#dHold").innerHTML = `<div class="sec">📦 상위 보유 종목 · 비중</div><div class="card">` + hs.map(h => {
-      const p = raw(h.holdingPercent) || 0;
-      return `<div style="padding:5px 0" data-hs="${esc(h.symbol)}"><div class="between"><span class="b small">${esc(allStocks().get(h.symbol)?.ko || h.holdingName)}</span><span class="small"><span class="muted">${esc(h.symbol || "")}</span> <b class="ac">${(p * 100).toFixed(1)}%</b></span></div><div class="bar"><div style="width:${p / mx * 100}%;background:var(--accent)"></div></div></div>`;
-    }).join("") + `<div class="sub b" style="margin-top:6px">상위 ${hs.length}개 합계 ${(sum * 100).toFixed(1)}%${sum >= .6 ? " · 소수 종목에 집중된 편" : sum < .35 ? " · 넓게 분산된 편" : ""}</div></div>`;
-    $("#dHold").querySelectorAll("[data-hs]").forEach(el => el.onclick = () => el.dataset.hs && go("s/" + encodeURIComponent(el.dataset.hs)));
-  }
-}
-
 // ───────────── 지표 히스토리 + 백테스트 ─────────────
 const dayKey = ms => Math.floor(ms / 86400000);
 function alignTo(t, d) {
@@ -925,11 +704,3 @@ function renderSettings() {
   $("#resetBtn").onclick = () => { if (confirm("섹터와 종목 목록을 기본값으로 되돌릴까요? (관심·메모는 유지)")) { S.sectors = JSON.parse(JSON.stringify(CATALOG)); S.deleted.clear(); S.save(); toast("초기화했어요"); go(""); } };
 }
 
-// ───────────── 시작 ─────────────
-(async () => {
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { });
-  await loadCatalog();
-  if (!location.hash) { const last = LS.get("lastHash", ""); if (last && last !== "#/") { location.hash = last; return; } }
-  render();
-})();
-document.addEventListener("visibilitychange", () => { if (!document.hidden && route().name === "home") refreshQuotes(false); });
