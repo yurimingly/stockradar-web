@@ -455,6 +455,93 @@ const sigRow = g => `<div style="padding:10px 0;border-top:1px solid var(--line)
   <div class="between" style="margin-top:4px"><span class="sub">기준: ${esc(g.rule)}</span><span class="badge" style="background:${sigColor(g.state)};flex:none">${sigLabel(g.state)}</span></div>
   <div class="small" style="margin-top:4px;line-height:1.45">${esc(g.note)}</div></div>`;
 
+// ───────────── AI 뉴스 요약 (Gemini) ─────────────
+// 키는 이 아이폰에만 저장 (공개 사이트라 코드에 절대 넣지 않음)
+// 무료 키 우선 → 무료 한도 소진 시 유료 키가 있으면 예상 금액을 보여주고 확인 후에만 사용
+const AI = {
+  MODELS: ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"],
+  price(m) { return m.includes("lite") ? [0.10, 0.40] : m.includes("pro") ? [1.25, 10] : [0.30, 2.50]; },
+  resetText() {
+    // 구글 무료 한도는 미국 서부 자정에 초기화 → 한국 시간으로
+    const now = new Date(), la = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+    const next = new Date(la); next.setHours(24, 0, 0, 0);
+    const kr = new Date(now.getTime() + (next - la));
+    return `${kr.getMonth() + 1}/${kr.getDate()} ${kr.getHours() < 12 ? "오전" : "오후"} ${kr.getHours() % 12 || 12}시`;
+  },
+  prompt(st, sym, news) {
+    const lines = news.map(n => `- [${n.time ? new Date(n.time).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" }) : "?"}] (${n.src || "출처 미상"}) ${n.title}`).join("\n");
+    return `너는 주식 뉴스를 한국 개인 투자자에게 정리해주는 애널리스트다.
+아래는 ${sym} (${st.ko}) 관련 최근 뉴스 목록이다 (날짜, 출처, 제목).
+규칙:
+- 목록에 있는 내용에만 근거하고, 없는 사실을 지어내지 마라.
+- 같은 사건을 다룬 기사는 하나로 합쳐라. 이 종목과 무관한 기사는 무시해라.
+- 모두 자연스러운 한국어로, 각 항목은 한 문장으로 짧게.
+- 매수·매도 권유 표현은 쓰지 마라.
+출력(JSON): oneLine(최근 뉴스 흐름 한 문장), mood(긍정/중립/부정), points(핵심 3~5개, 최신순), good(호재 0~3개), bad(악재·리스크 0~3개), watch(앞으로 주목할 일정·이벤트 0~3개)
+
+뉴스 목록:
+${lines}`;
+  },
+  estimateKrw(promptLen) {
+    const [pin, pout] = AI.price(AI.MODELS[0]);
+    const usd = (promptLen / 2.5 * pin + 1500 * pout) / 1e6;   // 출력·생각 토큰 넉넉히 1500개로
+    return Math.max(1, Math.ceil(usd * 1450));
+  },
+  async call(key, prompt) {
+    const schema = { type: "OBJECT", properties: { oneLine: { type: "STRING" }, mood: { type: "STRING" }, points: { type: "ARRAY", items: { type: "STRING" } },
+      good: { type: "ARRAY", items: { type: "STRING" } }, bad: { type: "ARRAY", items: { type: "STRING" } }, watch: { type: "ARRAY", items: { type: "STRING" } } }, required: ["oneLine", "mood", "points"] };
+    let last;
+    for (const m of AI.MODELS) {
+      let r;
+      try {
+        r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, { method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0.3, responseMimeType: "application/json", responseSchema: schema } }) });
+      } catch (e) { last = { code: 599, msg: "네트워크 오류" }; continue; }
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        const text = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("");
+        const um = j.usageMetadata || {}, [pin, pout] = AI.price(m);
+        const usd = ((um.promptTokenCount || 0) * pin + ((um.candidatesTokenCount || 0) + (um.thoughtsTokenCount || 0)) * pout) / 1e6;
+        return { ...JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)), model: m, usd };
+      }
+      last = { code: r.status, msg: j.error?.message || "" };
+      if (!(r.status === 429 || r.status >= 500 || r.status === 404)) break;
+    }
+    throw last || { code: 0, msg: "요약 실패" };
+  },
+  async digest(st, sym, news, force) {
+    const cacheKey = "dg_" + sym, c = LS.get(cacheKey, null);
+    if (!force && c && Date.now() - c.at < 6 * 3600_000) return c;
+    const free = LS.get("gemFree", ""), paid = LS.get("gemPaid", "");
+    if (!free && !paid) throw { code: -1, msg: "설정에서 Gemini API 키를 넣으면 뉴스를 AI가 요약해줘요 (무료)" };
+    if (!news.length) throw { code: 0, msg: "요약할 뉴스가 없어요" };
+    const prompt = AI.prompt(st, sym, news.slice(0, 25));
+    let out, usedPaid = false;
+    try {
+      if (!free) throw { code: 429 };
+      out = await AI.call(free, prompt);
+    } catch (e) {
+      if (e.code !== 429) throw { code: e.code, msg: e.code === 400 || e.code === 401 || e.code === 403 ? "Gemini API 키가 올바르지 않아요" : e.code >= 500 ? "Gemini 서버가 혼잡해요. 잠시 후 다시 눌러주세요" : "요약 실패: " + (e.msg || e.code) };
+      if (!paid) throw { code: 429, msg: `오늘 Gemini 무료 사용량을 다 썼어요. ${AI.resetText()} 이후 다시 무료로 요약돼요` };
+      const krw = AI.estimateKrw(prompt.length), spent = LS.get("gemSpent", 0);
+      if (!confirm(`무료 사용량을 다 썼어요.\n\n유료 키로 요약할까요?\n예상 비용: 약 ${krw}원 (이번 1회)\n지금까지 유료 사용: 약 ${Math.round(spent)}원\n\n취소하면 ${AI.resetText()} 이후 무료로 다시 요약돼요.`))
+        throw { code: 429, msg: `유료 요약을 취소했어요. ${AI.resetText()} 이후 무료로 다시 요약돼요` };
+      out = await AI.call(paid, prompt); usedPaid = true;
+      LS.set("gemSpent", spent + out.usd * 1450);
+    }
+    const d = { ...out, at: Date.now(), n: news.length, paid: usedPaid };
+    LS.set(cacheKey, d);
+    return d;
+  }
+};
+function digestHtml(d) {
+  const mc = d.mood?.includes("긍정") ? "g" : d.mood?.includes("부정") ? "r" : "a";
+  const list = (t, a, c) => a?.length ? `<div class="b small ${c || ""}" style="margin-top:10px">${t}</div>` + a.map(x => `<div class="small" style="margin-top:3px;line-height:1.45">• ${esc(x)}</div>`).join("") : "";
+  return `<div class="between"><span class="badge" style="background:var(--${mc === "g" ? "green" : mc === "r" ? "red" : "amber"})">${esc(d.mood || "중립")}</span><span class="sub">${ago(d.at)} · 기사 ${d.n}개${d.paid ? ` · 유료 약 ${Math.max(1, Math.round(d.usd * 1450))}원` : " · 무료"}</span></div>
+    <div class="b" style="margin-top:8px;line-height:1.45">${esc(d.oneLine)}</div>${list("📌 핵심", d.points)}${list("👍 호재", d.good, "g")}${list("⚠️ 악재·리스크", d.bad, "r")}${list("📅 주목할 일정", d.watch, "ac")}`;
+}
+
 // ───────────── 종목 상세 ─────────────
 const RANGES = [["1일", "1d", "5m"], ["5일", "5d", "30m"], ["1개월", "1mo", "1d"], ["6개월", "6mo", "1d"], ["1년", "1y", "1d"], ["5년", "5y", "1wk"], ["전체", "max", "1mo"]];
 async function renderDetail(sym) {
@@ -473,6 +560,7 @@ async function renderDetail(sym) {
     <div class="sec">🚦 매수 타이밍 신호</div><div class="card" id="dSig"><div class="spin">계산 중…</div></div>
     <div class="sec">📊 주요 지표</div><div class="card" id="dMetrics"><div class="spin">불러오는 중…</div></div>
     <div id="dHold"></div>
+    <div class="between"><div class="sec">🤖 AI 뉴스 요약</div><button class="chip sm" id="aiRe">다시 요약</button></div><div class="card" id="dAI"><div class="spin">뉴스 모으는 중…</div></div>
     <div class="sec">📰 뉴스</div><div class="chips" id="newsTabs"></div><div class="card" id="dNews"><div class="spin">불러오는 중…</div></div>
     <div class="sec">🔗 링크</div><div class="card">
       <a class="link" target="_blank" href="https://finance.yahoo.com/quote/${encodeURIComponent(sym)}">Yahoo Finance ›</a><br>
@@ -532,6 +620,18 @@ async function renderDetail(sym) {
   const tabs = [["국내", async () => pre?.ko?.length ? pre.ko : newsSearch((st.ko && st.ko !== sym ? st.ko.replace(/\(.*\)/, "").trim() : sym) + " 주가")],
     ...(isKr(sym) ? [] : [["해외", async () => pre?.en?.length ? pre.en : newsSearch((qq?.name || sym) + " stock", true)]]),
     ["🔍 기업분석", async () => pre?.an?.length ? pre.an : newsSearch((st.ko || sym).replace(/\(.*\)/, "").trim() + " 기업분석")]];
+  const runAI = async force => {
+    $("#dAI").innerHTML = `<div class="spin">AI가 최근 뉴스를 읽는 중… (10초쯤)</div>`;
+    try {
+      const all = [...(await tabs[0][1]()), ...(tabs.length > 2 ? await tabs[1][1]() : [])];
+      const d = await AI.digest(st, sym, all, force);
+      $("#dAI").innerHTML = digestHtml(d) + `<div class="sub" style="margin-top:10px">AI가 기사 제목을 정리한 거라 틀릴 수 있어요. 중요한 건 원문을 확인하세요.</div>`;
+    } catch (e) {
+      $("#dAI").innerHTML = `<div class="small">${esc(e.msg || "요약 실패")}</div>` + (e.code === -1 ? `<a class="link" href="#/settings">Gemini 키 넣으러 가기 ›</a>` : "");
+    }
+  };
+  $("#aiRe").onclick = () => runAI(true);
+  runAI(false);
   let nt = 0;
   const loadNews = async () => {
     $("#newsTabs").innerHTML = tabs.map((t, i) => `<button class="chip ${i === nt ? "on" : ""}" data-n="${i}">${t[0]}</button>`).join("");
@@ -810,10 +910,18 @@ async function renderSignals() {
 // ───────────── 설정 ─────────────
 function renderSettings() {
   setHeader("⚙️ 설정", true);
-  $("#app").innerHTML = `<div class="card"><div class="b">아이폰 홈 화면에 추가하기</div><div class="sub" style="margin-top:6px">사파리 아래쪽 공유 버튼(□↑) → "홈 화면에 추가" → 추가. 이후엔 앱처럼 전체 화면으로 열려요.</div></div>
+  $("#app").innerHTML = `<div class="card"><div class="b">🤖 AI 뉴스 요약 (Gemini)</div>
+      <div class="sub" style="margin:6px 0">무료 키를 넣으면 종목마다 최근 뉴스를 AI가 한국어로 요약해줘요. 키는 이 아이폰에만 저장되고 다른 곳으로 보내지 않아요.<br>
+      키 발급(무료): <a target="_blank" href="https://aistudio.google.com/apikey">https://aistudio.google.com/apikey</a> → Create API key → 복사</div>
+      <div class="sub b" style="margin-top:8px">무료 키</div><input id="kFree" placeholder="AIza… 로 시작하는 키" value="${esc(LS.get("gemFree", ""))}">
+      <div class="sub b" style="margin-top:10px">유료 키 (선택)</div><input id="kPaid" placeholder="없으면 비워두세요" value="${esc(LS.get("gemPaid", ""))}">
+      <div class="sub" style="margin-top:6px">무료 사용량을 다 쓰면, 유료 키가 있을 때만 <b>예상 금액을 먼저 보여주고 확인을 받은 뒤</b> 써요. 지금까지 유료 사용: 약 ${Math.round(LS.get("gemSpent", 0))}원</div>
+      <button class="btn" id="kSave" style="margin-top:10px">저장</button></div>
+    <div class="card"><div class="b">아이폰 홈 화면에 추가하기</div><div class="sub" style="margin-top:6px">사파리 아래쪽 공유 버튼(□↑) → "홈 화면에 추가" → 추가. 이후엔 앱처럼 전체 화면으로 열려요.</div></div>
     <div class="card"><div class="b">데이터</div><div class="sub" style="margin-top:6px">섹터·관심·메모는 이 아이폰(사파리)에만 저장돼요. 사파리 방문 기록을 지우면 같이 지워질 수 있어요.</div>
       <button class="btn ghost" id="resetBtn" style="margin-top:10px">섹터를 기본값으로 초기화</button></div>
     <div class="card sub">StockRadar 웹 · 안드로이드 앱과 같은 기준 · 데이터는 약 20분마다 갱신 (실시간 아님) · 시세 Yahoo Finance, 뉴스 Google News, 공포·탐욕 CNN</div>`;
+  $("#kSave").onclick = () => { LS.set("gemFree", $("#kFree").value.trim()); LS.set("gemPaid", $("#kPaid").value.trim()); toast("저장했어요"); };
   $("#resetBtn").onclick = () => { if (confirm("섹터와 종목 목록을 기본값으로 되돌릴까요? (관심·메모는 유지)")) { S.sectors = JSON.parse(JSON.stringify(CATALOG)); S.deleted.clear(); S.save(); toast("초기화했어요"); go(""); } };
 }
 
