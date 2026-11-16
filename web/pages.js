@@ -1173,6 +1173,7 @@ function drawer(open) {
 
 async function render(force) {
   const r = route();
+  $("#drawer").classList.add("hidden"); $("#drawerBg").classList.add("hidden"); closeSheet();
   LS.set("lastHash", location.hash);
   if (r.name !== "home") window.scrollTo(0, 0);
   const a = r.args;

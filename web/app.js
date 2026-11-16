@@ -175,7 +175,7 @@ function route() {
   return { name: a, args: rest };
 }
 function go(path) { location.hash = "#/" + path; }
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => render());
 
 function setHeader(title, back) {
   $("#title").textContent = title;
