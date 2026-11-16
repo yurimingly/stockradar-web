@@ -1,0 +1,51 @@
+name: 데이터 갱신 + 웹앱 배포
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"     # 20분마다 (GitHub 사정에 따라 조금 늦을 수 있음)
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: 지난번 데이터 가져오기 (자주 안 바뀌는 건 다시 안 받으려고)
+        run: |
+          git fetch origin gh-pages --depth=1 && git checkout origin/gh-pages -- data || echo "첫 실행"
+          git reset -q
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: 데이터 받기
+        run: python scripts/fetch.py
+      - name: 사이트 만들기
+        run: |
+          mkdir _site && cp -r web/* _site/ && cp -r data _site/data && touch _site/.nojekyll
+      - name: gh-pages 브랜치로 배포
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          publish_branch: gh-pages
+          force_orphan: true
+          user_name: github-actions[bot]
+          user_email: github-actions[bot]@users.noreply.github.com
+          commit_message: 데이터 갱신
+      - name: 60일 비활성으로 예약 실행이 꺼지지 않게 매달 1일 표시 커밋
+        run: |
+          if [ "$(date -u +%d)" = "01" ] && [ "$(date -u +%H)" = "00" ] && [ "$(date -u +%M)" -lt 20 ]; then
+            git config user.name github-actions[bot]; git config user.email github-actions[bot]@users.noreply.github.com
+            git commit --allow-empty -m "keepalive" && git push
+          fi
