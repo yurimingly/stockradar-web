@@ -492,6 +492,9 @@ def main():
 
     # 2) 차트
     def do_chart(sym):
+        try: _do_chart(sym)
+        except Exception as e: print("chart fail", sym, e)
+    def _do_chart(sym):
         f = fname(sym)
         c = chart(sym, "5d", "15m")
         if c: save(path("c", f + ".i.json"), c)
@@ -516,8 +519,12 @@ def main():
     # 3) 지표 (12시간마다) + 한국 ETF 구성 종목 + 연도별 추이 (하루 1번)
     metrics = load(path("metrics.json"), {}) or {}
     def do_sum(sym):
+        try: _do_sum(sym)
+        except Exception as e: print("summary fail", sym, e)
+    def _do_sum(sym):
         st = stocks[sym]; f = fname(sym)
-        if stale("s:" + sym, 12 * 3600) or not os.path.exists(path("s", f + ".json")):
+        old = load(path("s", f + ".json"))
+        if stale("s:" + sym, 12 * 3600) or not (old and "stats" in old):
             sm = summary(sym, st.get("etf"), rate, (q.get(sym) or {}).get("price") or 0)
             if sm:
                 if st.get("etf") and not sm["holdings"] and is_kr(sym):
@@ -525,9 +532,8 @@ def main():
                     if items: sm["holdings"] = items; sm["holdSrc"] = src
                 save(path("s", f + ".json"), sm); mark("s:" + sym)
                 metrics[sym] = {**sm["raw"], "_ind": sm.get("industry", "")}
-        elif sym not in metrics:
-            sm = load(path("s", f + ".json"))
-            if sm: metrics[sym] = {**sm["raw"], "_ind": sm.get("industry", "")}
+        elif sym not in metrics and old and "raw" in old:
+            metrics[sym] = {**old["raw"], "_ind": old.get("industry", "")}
         if not st.get("etf") and (stale("vh:" + sym, 24 * 3600) or not os.path.exists(path("vh", f + ".json"))):
             save(path("vh", f + ".json"), valuation_history(sym)); mark("vh:" + sym)
     with ThreadPoolExecutor(4) as ex: list(ex.map(do_sum, syms))
@@ -535,6 +541,9 @@ def main():
 
     # 4) 뉴스 (2시간마다) + 최근 48시간 뉴스 건수 ('뉴스 많은 순' 정렬용)
     def do_news(sym):
+        try: _do_news(sym)
+        except Exception as e: print("news fail", sym, e)
+    def _do_news(sym):
         f = fname(sym)
         if stale("n:" + sym, 2 * 3600) or not os.path.exists(path("n", f + ".json")):
             st = stocks[sym]
@@ -569,6 +578,18 @@ def main():
             except Exception: pass
 
     # 7) S&P 500 (목록 하루 1번, 시총 3시간마다)
+    try: do_sp500()
+    except Exception as e: print('sp500 fail', e)
+    try: do_disc(static)
+    except Exception as e: print('disc fail', e)
+    try: do_hub(static)
+    except Exception as e: print('hub fail', e)
+
+    meta["updatedAt"] = int(NOW * 1000)
+    save(path("meta.json"), meta)
+    print("done in", int(time.time() - NOW), "s")
+
+def do_sp500():
     sp = load(path("sp500.json"), None)
     if stale("sp", 20 * 3600) or not sp:
         got = sp500()
@@ -579,6 +600,7 @@ def main():
     if sp: save(path("sp500.json"), sp)
     print("sp500", len(sp["m"]) if sp else 0)
 
+def do_disc(static):
     # 8) 종목 발굴 (30분마다)
     if stale("disc", 30 * 60):
         disc = {"at": int(NOW * 1000)}
@@ -611,6 +633,7 @@ def main():
                          "pct": rq[t].get("pct"), "cap": rq[t].get("cap")} for t in rank if t in rq]
         save(path("disc.json"), disc); mark("disc")
 
+def do_hub(static):
     # 9) 뉴스 모아보기 (30분마다)
     if stale("hub", 30 * 60):
         hub = {"at": int(NOW * 1000)}
@@ -627,10 +650,6 @@ def main():
         hub["kw"] = {k: gnews(f'"{k}"') for k in ["박주근의 기업분석", "기업분석 심층"]}
         hub["crowd"] = {q2: gnews(q2) for _, q2 in static.get("crowd", {}).get("newsQueries", [])}
         save(path("hub.json"), hub); mark("hub")
-
-    meta["updatedAt"] = int(NOW * 1000)
-    save(path("meta.json"), meta)
-    print("done in", int(time.time() - NOW), "s")
 
 if __name__ == "__main__":
     main()
