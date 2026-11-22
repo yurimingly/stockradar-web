@@ -882,7 +882,7 @@ const D = { tab: 0, scr: 0, feed: 0 };
 async function renderDiscover() {
   setHeader("🔭 종목 발굴", true);
   const mine = new Set(S.sectors.flatMap(s => s.stocks.map(x => x.t)));
-  let h = chipsHtml([[0, "🔥 지금 화제"], [3, "🏆 전문가 픽 랭킹"], [1, "📈 조건별 발굴"], [2, "🗞 전문가 추천 기사"]], D.tab, "dt");
+  let h = chipsHtml([[0, "🔥 지금 화제"], [4, "🆕 신규 상장"], [3, "🏆 전문가 픽 랭킹"], [1, "📈 조건별 발굴"], [2, "🗞 전문가 추천 기사"]], D.tab, "dt");
   if (D.tab === 1) h += `<div style="height:6px"></div>` + chipsHtml(STATIC.screens.map((s, i) => [i, s[1]]), D.scr, "ds");
   if (D.tab === 2) h += `<div style="height:6px"></div>` + chipsHtml(STATIC.expertFeeds.map((f, i) => [i, f[0]]), D.feed, "df");
   h += `<div id="dBody" style="margin-top:8px"><div class="spin">불러오는 중…</div></div>`;
@@ -896,7 +896,14 @@ async function renderDiscover() {
     <div style="text-align:right;flex:none"><div class="b">${money(x.price, x.sym)}</div><span class="pill" style="background:${(x.pct || 0) >= 0 ? "var(--green)" : "var(--red)"}">${pct(x.pct)}</span></div></div>`;
   let b = "";
   const empty = note(d.at ? "불러오지 못했어요. 잠시 후 다시 열어주세요." : "아직 데이터가 없어요. GitHub이 30분마다 모아요.");
-  if (D.tab === 0) b = note("미국에서 지금 가장 많이 검색·거래되는 종목이에요 (Yahoo Finance 기준). 탭하면 상세 화면에서 지표·대가 점수를 확인하고 '내 목록에 추가'할 수 있어요.") + ((d.trend || []).map(x => row(x)).join("") || empty);
+  if (D.tab === 4) {
+    const ip = await data("ipo.json", 600_000) || {};
+    b = `<div class="card"><div class="b ac">최근 4개월 미국 신규 상장 (시총 10억 달러 이상)</div><div class="small" style="margin-top:2px;line-height:1.45">시총 100억 달러 이상 큰 종목은 앱이 알맞은 섹터에 자동으로 넣어줘요 (지우면 다시 안 넣어요). 갓 상장한 종목은 재무 지표·차트가 짧고 주가가 크게 출렁여요.</div></div>` +
+      ((ip.list || []).map(x => row({ ...x, name: x.ko }, [new Date(x.date).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" }).replace(/\. /g, "/").replace(".", "") + " 상장",
+        x.ipoPrice ? "공모가 $" + f2(x.ipoPrice) : "", x.sinceIpo != null ? "공모가 대비 " + pct(x.sinceIpo) : "", x.sector].filter(Boolean).join(" · "))).join("") || note("신규 상장 목록이 아직 없어요. GitHub이 3시간마다 모아요.")) +
+      (ip.upcoming?.length ? `<div class="b" style="margin:14px 4px 6px">📅 상장 예정</div>` + ip.upcoming.map(u => `<div class="card"><b>${esc(u.sym)}</b>  ${esc(u.name)}<div class="sub" style="margin-top:2px">${[u.date || "날짜 미정", u.range ? "공모가 $" + esc(u.range) : "", esc(u.deal || "")].filter(Boolean).join(" · ")}</div></div>`).join("") : "") +
+      note(`출처: ${esc(ip.src || "Nasdaq")} IPO 일정 · 3시간마다 갱신. 탭하면 상세 화면으로 가요.`);
+  } else if (D.tab === 0) b = note("미국에서 지금 가장 많이 검색·거래되는 종목이에요 (Yahoo Finance 기준). 탭하면 상세 화면에서 지표·대가 점수를 확인하고 '내 목록에 추가'할 수 있어요.") + ((d.trend || []).map(x => row(x)).join("") || empty);
   else if (D.tab === 3) b = `<div class="card"><div class="b ac">모틀리 풀·잭스·모닝스타·배런스가 최근 공개 기사에서 많이 꼽은 종목</div><div class="small" style="margin-top:2px;line-height:1.45">여러 곳에서 동시에 언급될수록 위로 와요. 유료 추천 목록이 아니라 무료 기사에 나온 티커를 세어 만든 순위예요 (30분마다 갱신).</div></div>` +
     ((d.rank || []).map((x, i) => row(x, `${i + 1}위 · ${x.sources.join("·")} ${x.count}회 언급`)).join("") || empty);
   else if (D.tab === 1) { const [id, name, desc] = STATIC.screens[D.scr] || []; b = `<div class="card"><div class="b ac">${esc(name)}</div><div class="small" style="margin-top:2px">${esc(desc)}</div><div class="sub" style="margin-top:4px">Yahoo Finance 무료 스크리너 결과 · 30분마다 갱신</div></div>` + ((d.scr?.[id] || []).map(x => row(x)).join("") || empty); }
@@ -1194,11 +1201,32 @@ async function render(force) {
   go("");
 }
 
+// ───────────── 신규 상장 자동 추가 ─────────────
+// 시총 100억 달러 이상 신규 상장은 알맞은 섹터 맨 앞에 넣어 줌. 한 번 넣은(또는 지운) 종목은 다시 건드리지 않음
+async function applyIpos() {
+  const ip = await data("ipo.json", 600_000); if (!ip?.list) return;
+  const seen = new Set(LS.get("ipoSeen", [])), added = [];
+  for (const x of ip.list) {
+    if (!x.auto || seen.has(x.sym)) continue;
+    seen.add(x.sym);
+    if (sectorIdx(x.sym) >= 0) continue;
+    let i = x.sector ? S.sectors.findIndex(s => s.name === x.sector) : -1;
+    if (i < 0) { i = S.sectors.findIndex(s => s.name === "신규 상장"); if (i < 0) { S.sectors.push({ name: "신규 상장", emoji: "🆕", stocks: [] }); i = S.sectors.length - 1; } }
+    const day = new Date(x.date).toLocaleDateString("ko-KR");
+    S.sectors[i].stocks.unshift({ t: x.sym, ko: x.ko, desc: `🆕 ${day} 신규 상장` + (x.ipoPrice ? ` · 공모가 $${f2(x.ipoPrice)}` : ""), pts: [x.ind, "갓 상장해서 재무 지표·과거 차트가 짧고 주가 변동이 큼"].filter(Boolean), etf: false });
+    S.deleted.delete(S.sectors[i].name + ":" + x.sym);
+    added.push(`${x.ko}(${x.sym}) → ${S.sectors[i].name}`);
+  }
+  LS.set("ipoSeen", [...seen]);
+  if (added.length) { S.save(); toast("🆕 신규 상장 추가: " + added.join(", ")); if (route().name === "home") renderHome(true); }
+}
+
 // ───────────── 시작 ─────────────
 (async () => {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { });
   await Promise.all([loadCatalog(), loadStatic()]);
   if (!location.hash) { const last = LS.get("lastHash", ""); if (last && last !== "#/") { location.hash = last; return; } }
   render();
+  applyIpos();
 })();
 document.addEventListener("visibilitychange", () => { if (!document.hidden && route().name === "home") refreshQuotes(false); });

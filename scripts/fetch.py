@@ -476,7 +476,7 @@ KO_NAMES = {"ANT": "앤트로픽 (Claude)", "SPCX": "스페이스X", "OPAI": "�
 IPO_SECTOR_RULES = [("레버리지·인버스 ETF", r"2x|3x|leveraged|inverse"), ("양자컴퓨팅", r"quantum"), ("사이버보안", r"security|cyber"),
     ("AI 소프트웨어", r"artificial intelligence|\bai\b|large language|machine learning|software"),
     ("AI·반도체", r"semiconductor"), ("AI 인프라·데이터센터", r"data cent|cloud infrastructure|gpu cloud|computer hardware"),
-    ("생명과학", r"biotech|drug|pharma|medical|diagnostic|health"), ("우주항공", r"space|satellite|launch vehicle"),
+    ("생명과학", r"biotech|drug|pharma|medical|diagnostic|health"), ("우주항공", r"\bspace|satellite|launch vehicle"),
     ("방산·드론", r"aerospace|defense|drone"), ("원자력·전력", r"utilit|uranium|nuclear|electrical equipment|power producer"),
     ("클린에너지·ESS", r"solar|renewable|battery|batteries|hydrogen"), ("로봇·자율주행", r"robot|automation|autonomous|auto manufacturers"),
     ("화장품·뷰티", r"personal products|cosmetic|beauty"), ("핀테크·디지털자산", r"credit services|capital markets|crypto|fintech|payment|stablecoin|financial data")]
@@ -531,7 +531,7 @@ def to_ms(d):
 
 def do_ipo():
     old = load(path("ipo.json"), {}) or {}
-    if not stale("ipo", 3 * 3600) and old.get("list") is not None: return old
+    if not stale("ipo", 3 * 3600) and old.get("list") is not None and all(x.get("rv") == 2 for x in old["list"]): return old
     priced, upcoming = nasdaq_ipos()
     src = "Nasdaq"
     if not priced: priced, src = stockanalysis_ipos(), "stockanalysis.com"
@@ -541,7 +541,7 @@ def do_ipo():
     for p in priced:
         sym = (p.get("sym") or "").strip().upper().replace(".", "-")
         ms = to_ms(p.get("date") or "")
-        if not sym or sym in seen or (ms and ms < since): continue
+        if not sym or sym in seen or (ms and ms < since) or re.search(r"spac|acquisition corp|blank check", (p.get("name") or "").lower()): continue
         seen.add(sym); p["sym"] = sym; p["ms"] = ms; rows.append(p)
     qs = quotes([p["sym"] for p in rows]) if rows else {}
     prev = {x["sym"]: x for x in old.get("list", [])}
@@ -550,13 +550,14 @@ def do_ipo():
         q = qs.get(p["sym"]) or {}
         cap = q.get("cap") or 0
         if cap < LIST_MIN_CAP: continue
-        sec, ind = (prev[p["sym"]].get("sector", ""), prev[p["sym"]].get("ind", "")) if p["sym"] in prev and prev[p["sym"]].get("ind") else ipo_sector(p["sym"], p.get("name") or "")
+        sec, ind = (prev[p["sym"]].get("sector", ""), prev[p["sym"]].get("ind", "")) if p["sym"] in prev and prev[p["sym"]].get("ind") and prev[p["sym"]].get("rv") == 2 else ipo_sector(p["sym"], p.get("name") or "")
         price = q.get("price")
         out.append({"sym": p["sym"], "name": q.get("name") or p.get("name"), "ko": KO_NAMES.get(p["sym"], q.get("name") or p.get("name")), "date": p["ms"],
                     "ipoPrice": p.get("ipoPrice"), "price": price, "pct": q.get("pct"), "cap": cap, "sector": sec, "ind": ind,
-                    "sinceIpo": (price / p["ipoPrice"] - 1) * 100 if price and p.get("ipoPrice") else None, "auto": cap >= AUTO_ADD_CAP})
+                    "sinceIpo": (price / p["ipoPrice"] - 1) * 100 if price and p.get("ipoPrice") else None, "auto": cap >= AUTO_ADD_CAP, "rv": 2})
     out.sort(key=lambda x: -x["cap"])
-    up = [u for u in upcoming if u.get("sym")][:20]
+    spac = lambda n: re.search(r"spac|acquisition corp|blank check", (n or "").lower())
+    up = [u for u in upcoming if u.get("sym") and not spac(u.get("name"))][:20]
     res = {"at": int(NOW * 1000), "src": src, "list": out[:40], "upcoming": up, "autoCap": AUTO_ADD_CAP}
     save(path("ipo.json"), res); mark("ipo")
     print("ipo", len(out), [x["sym"] for x in out[:8]])
