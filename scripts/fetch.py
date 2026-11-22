@@ -340,7 +340,7 @@ def summary(sym, etf, rate, price):
 def num(v):
     if isinstance(v, (int, float)): return float(v)
     if isinstance(v, str):
-        try: return float(v.replace(",", "").replace("%", "").strip())
+        try: return float(v.replace(",", "").replace("%", "").replace("$", "").strip())
         except Exception: return None
     return None
 def scan_json(root):
@@ -467,6 +467,101 @@ def sp500():
         elif len(c) == 5: changes.append([last, ysym(c[0]), c[1], ysym(c[2]), c[3], c[4]])
     return (members, changes[:80]) if len(members) >= 400 else None
 
+# ───────── 신규 상장 (IPO) ─────────
+# 큰 신규 상장은 앱·웹앱이 알맞은 섹터에 자동으로 넣어 줌 (사용자가 지우면 다시 안 넣음)
+AUTO_ADD_CAP = 10e9          # 시총 100억 달러 이상이면 자동 추가
+LIST_MIN_CAP = 1e9           # 목록에는 10억 달러 이상만
+KO_NAMES = {"ANT": "앤트로픽 (Claude)", "SPCX": "스페이스X", "OPAI": "오픈AI", "CRWV": "코어위브", "CRCL": "써클", "FIG": "피그마",
+            "KLAR": "클라르나", "NBIS": "네비우스", "CBRS": "세레브라스", "DBX": "드롭박스"}
+IPO_SECTOR_RULES = [("레버리지·인버스 ETF", r"2x|3x|leveraged|inverse"), ("양자컴퓨팅", r"quantum"), ("사이버보안", r"security|cyber"),
+    ("AI 소프트웨어", r"artificial intelligence|\bai\b|large language|machine learning|software"),
+    ("AI·반도체", r"semiconductor"), ("AI 인프라·데이터센터", r"data cent|cloud infrastructure|gpu cloud|computer hardware"),
+    ("생명과학", r"biotech|drug|pharma|medical|diagnostic|health"), ("우주항공", r"space|satellite|launch vehicle"),
+    ("방산·드론", r"aerospace|defense|drone"), ("원자력·전력", r"utilit|uranium|nuclear|electrical equipment|power producer"),
+    ("클린에너지·ESS", r"solar|renewable|battery|batteries|hydrogen"), ("로봇·자율주행", r"robot|automation|autonomous|auto manufacturers"),
+    ("화장품·뷰티", r"personal products|cosmetic|beauty"), ("핀테크·디지털자산", r"credit services|capital markets|crypto|fintech|payment|stablecoin|financial data")]
+
+def ipo_sector(sym, name):
+    r = get(f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{urllib.parse.quote(sym)}?modules=assetProfile" + cq())
+    ap = {}
+    try: ap = r.json()["quoteSummary"]["result"][0].get("assetProfile") or {}
+    except Exception: pass
+    head = f"{ap.get('sector', '')} {ap.get('industry', '')} {name}".lower()
+    body = (ap.get("longBusinessSummary") or "")[:600].lower()
+    for text in (head, head + " " + body):
+        for sec, pat in IPO_SECTOR_RULES:
+            if re.search(pat, text): return sec, f"{ap.get('sector', '')} · {ap.get('industry', '')}".strip(" ·")
+    return "", f"{ap.get('sector', '')} · {ap.get('industry', '')}".strip(" ·")
+
+def nasdaq_ipos():
+    hdr = {"User-Agent": UA, "Accept": "application/json, text/plain, */*", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
+    priced, upcoming = [], []
+    t = time.gmtime(NOW)
+    months = [(t.tm_year, t.tm_mon - i) for i in range(4)]
+    months = [(y - 1, m + 12) if m <= 0 else (y, m) for y, m in months]
+    for y, m in months:
+        r = get(f"https://api.nasdaq.com/api/ipo/calendar?date={y}-{m:02d}", headers=hdr)
+        try: d = r.json()["data"]
+        except Exception: continue
+        for row in ((d.get("priced") or {}).get("rows") or []):
+            priced.append({"sym": row.get("proposedTickerSymbol"), "name": row.get("companyName"), "date": row.get("pricedDate"),
+                           "ipoPrice": num(row.get("proposedSharePrice")), "deal": row.get("dollarValueOfSharesOffered"), "exch": row.get("proposedExchange")})
+        if (y, m) == months[0]:
+            for row in (((d.get("upcoming") or {}).get("upcomingTable") or {}).get("rows") or []):
+                upcoming.append({"sym": row.get("proposedTickerSymbol"), "name": row.get("companyName"), "date": row.get("expectedPriceDate"),
+                                 "range": row.get("proposedSharePrice"), "deal": row.get("dollarValueOfSharesOffered"), "exch": row.get("proposedExchange")})
+    return priced, upcoming
+
+def stockanalysis_ipos():
+    r = get("https://stockanalysis.com/ipos/")
+    if not r or r.status_code != 200: return []
+    out = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S):
+        m = re.search(r'href="/stocks/([a-z0-9.\-]+)/"', tr)
+        cells = [wclean(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        if m and len(cells) >= 4:
+            out.append({"sym": m.group(1).upper(), "name": cells[2], "date": cells[0], "ipoPrice": num(cells[3].replace("$", ""))})
+    return out
+
+def to_ms(d):
+    for fmt in ("%m/%d/%Y", "%b %d, %Y", "%Y-%m-%d"):
+        try: return int(time.mktime(time.strptime(d.strip(), fmt)) * 1000)
+        except Exception: pass
+    return 0
+
+def do_ipo():
+    old = load(path("ipo.json"), {}) or {}
+    if not stale("ipo", 3 * 3600) and old.get("list") is not None: return old
+    priced, upcoming = nasdaq_ipos()
+    src = "Nasdaq"
+    if not priced: priced, src = stockanalysis_ipos(), "stockanalysis.com"
+    print("ipo source", src, len(priced), "upcoming", len(upcoming))
+    since = NOW * 1000 - 120 * 86400_000
+    seen, rows = set(), []
+    for p in priced:
+        sym = (p.get("sym") or "").strip().upper().replace(".", "-")
+        ms = to_ms(p.get("date") or "")
+        if not sym or sym in seen or (ms and ms < since): continue
+        seen.add(sym); p["sym"] = sym; p["ms"] = ms; rows.append(p)
+    qs = quotes([p["sym"] for p in rows]) if rows else {}
+    prev = {x["sym"]: x for x in old.get("list", [])}
+    out = []
+    for p in rows:
+        q = qs.get(p["sym"]) or {}
+        cap = q.get("cap") or 0
+        if cap < LIST_MIN_CAP: continue
+        sec, ind = (prev[p["sym"]].get("sector", ""), prev[p["sym"]].get("ind", "")) if p["sym"] in prev and prev[p["sym"]].get("ind") else ipo_sector(p["sym"], p.get("name") or "")
+        price = q.get("price")
+        out.append({"sym": p["sym"], "name": q.get("name") or p.get("name"), "ko": KO_NAMES.get(p["sym"], q.get("name") or p.get("name")), "date": p["ms"],
+                    "ipoPrice": p.get("ipoPrice"), "price": price, "pct": q.get("pct"), "cap": cap, "sector": sec, "ind": ind,
+                    "sinceIpo": (price / p["ipoPrice"] - 1) * 100 if price and p.get("ipoPrice") else None, "auto": cap >= AUTO_ADD_CAP})
+    out.sort(key=lambda x: -x["cap"])
+    up = [u for u in upcoming if u.get("sym")][:20]
+    res = {"at": int(NOW * 1000), "src": src, "list": out[:40], "upcoming": up, "autoCap": AUTO_ADD_CAP}
+    save(path("ipo.json"), res); mark("ipo")
+    print("ipo", len(out), [x["sym"] for x in out[:8]])
+    return res
+
 # ───────── 종목 발굴 ─────────
 def tickers_in(text):
     out = []
@@ -489,9 +584,15 @@ def main():
     for s in cat:
         for st in s["stocks"]: stocks.setdefault(st["t"], st)
     crowd_syms = [x["sym"] for x in static.get("crowd", {}).get("top", [])]
+    crumb()
+    # 신규 상장: 큰 종목은 다른 종목처럼 차트·지표·뉴스도 미리 받아 둠
+    try:
+        ipo = do_ipo()
+        for x in ipo.get("list", []):
+            if x["sym"] not in stocks: stocks[x["sym"]] = {"t": x["sym"], "ko": x["ko"], "etf": False}
+    except Exception as e: print("ipo fail", e)
     syms = list(stocks)
     chart_syms = list(dict.fromkeys(syms + crowd_syms))
-    crumb()
     print("crumb", bool(CRUMB), "tickers", len(syms))
 
     # 1) 시세 (매번)
