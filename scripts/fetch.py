@@ -467,6 +467,179 @@ def sp500():
         elif len(c) == 5: changes.append([last, ysym(c[0]), c[1], ysym(c[2]), c[3], c[4]])
     return (members, changes[:80]) if len(members) >= 400 else None
 
+# ───────── 종목별 매수 타이밍 신호 (안드로이드 Signals.price 와 같은 계산) ─────────
+def rsi(c, n=14):
+    if len(c) <= n + 1: return None
+    g = l = 0.0
+    for i in range(1, n + 1):
+        d = c[i] - c[i - 1]
+        if d > 0: g += d
+        else: l -= d
+    g /= n; l /= n
+    for i in range(n + 1, len(c)):
+        d = c[i] - c[i - 1]
+        g = (g * (n - 1) + max(d, 0)) / n; l = (l * (n - 1) + max(-d, 0)) / n
+    return 100.0 if l == 0 else 100 - 100 / (1 + g / l)
+def ma(c, n): return sum(c[-n:]) / n if len(c) >= n else None
+
+def price_signals(daily, weekly, px, is_index=False, sym=""):
+    """[이름, 값, 상태] 상태: 2 매수 구간 · 1 관심 · 0 해당 없음 · -1 과열"""
+    out = []
+    if daily:
+        r = rsi(daily)
+        if r is not None: out.append(["RSI 일봉", f"{r:.0f}", 2 if r <= 30 else 1 if r <= 40 else -1 if r >= 70 else 0])
+    if weekly:
+        r = rsi(weekly)
+        if r is not None: out.append(["RSI 주봉", f"{r:.0f}", 2 if r <= 35 else 1 if r <= 45 else -1 if r >= 70 else 0])
+    hi = max([max(x) for x in (weekly, daily) if x] or [0])
+    if hi > 0:
+        dd = (px / hi - 1) * 100
+        if is_index:
+            avg = -20.0 if sym in ("^IXIC", "^NDX", "QQQ", "QQQM") else -14.0
+            out.append(["MDD", f"{dd:.1f}%", 2 if dd <= avg else 1 if dd <= avg / 2 else 0])
+        else: out.append(["MDD", f"{dd:.1f}%", 2 if dd <= -30 else 1 if dd <= -20 else 0])
+    m = ma(daily, 200) if daily else None
+    if m:
+        gap = (px / m - 1) * 100
+        out.append(["200일선", f"{gap:+.1f}%", 2 if gap <= -5 else 1 if gap < 0 else -1 if gap > 25 else 0])
+    m = ma(weekly, 200) if weekly else None
+    if m:
+        gap = (px / m - 1) * 100
+        out.append(["200주선", f"{gap:+.1f}%", 2 if gap <= 3 else 1 if gap <= 10 else 0])
+    return out
+
+def closes_since(f, days):
+    d = load(f)
+    if not d or not d.get("t"): return None
+    cut = NOW - days * 86400
+    return [c for t, c in zip(d["t"], d["c"]) if t >= cut and c is not None]
+
+def do_signals(stocks, q):
+    """내 목록 + S&P 500 전 종목의 신호를 계산해서 signals.json 으로 (앱·웹앱의 '매수 신호 많은 종목' 화면용)"""
+    sp = load(path("sp500.json"), {}) or {}
+    names = {m[0]: m[1] for m in sp.get("m", [])}
+    sectors = {m[0]: m[2] for m in sp.get("m", [])}
+    # S&P 500 중 내 목록에 없는 종목은 하루 1번 차트만 받아 둠
+    extra = [m for m in names if m not in stocks]
+    def do_chart(sym):
+        try:
+            f = fname(sym)
+            if stale("d:" + sym, 20 * 3600) or not os.path.exists(path("c", f + ".d.json")):
+                c = chart(sym, "2y", "1d")
+                if c: save(path("c", f + ".d.json"), c); mark("d:" + sym)
+            if stale("w:" + sym, 20 * 3600) or not os.path.exists(path("c", f + ".w.json")):
+                c = chart(sym, "10y", "1wk")
+                if c: save(path("c", f + ".w.json"), c); mark("w:" + sym)
+        except Exception as e: print("chart fail", sym, e)
+    with ThreadPoolExecutor(6) as ex: list(ex.map(do_chart, extra))
+    spq = sp.get("q", {})
+    rows = {}
+    for sym in list(stocks) + extra:
+        f = fname(sym)
+        daily, weekly = closes_since(path("c", f + ".d.json"), 366), closes_since(path("c", f + ".w.json"), 5 * 365.25)
+        px = (q.get(sym) or {}).get("price") or (spq.get(sym) or [None, None])[1] or (daily[-1] if daily else None)
+        if not px or not (daily or weekly): continue
+        if daily: daily[-1] = px
+        st = stocks.get(sym) or {}
+        sig = price_signals(daily, weekly, px, sym.startswith("^"), sym)
+        if not sig: continue
+        rows[sym] = {"n": st.get("ko") or names.get(sym, sym), "etf": bool(st.get("etf")), "my": sym in stocks, "sp": sym in names,
+                     "sec": sectors.get(sym, ""), "s": sig}
+    save(path("signals.json"), {"at": int(NOW * 1000), "rows": rows})
+    good = sorted(rows.items(), key=lambda kv: -sum(1 for x in kv[1]["s"] if x[2] == 2))[:5]
+    print("signals", len(rows), [(k, sum(1 for x in v["s"] if x[2] == 2)) for k, v in good])
+
+# ───────── 섹터 추천 종목 자동 채우기 (일주일에 1번) ─────────
+# 미국: 섹터 대표 테마 ETF의 보유 상위 종목 · 한국: 네이버 증권 '테마별 시세'
+FILL = {  # 섹터: ([미국 테마 ETF], [네이버 테마 이름에 들어간 말])
+    "양자컴퓨팅": (["QTUM"], ["양자"]),
+    "사이버보안": (["CIBR", "HACK"], ["보안주(정보)", "정보보안"]),
+    "생명과학": (["XBI", "IBB"], ["바이오시밀러", "유전자 치료"]),
+    "AI·반도체": (["SMH", "SOXX"], ["HBM", "반도체 장비"]),
+    "우주항공": (["UFO", "ARKX"], ["우주항공"]),
+    "원자력·전력": (["NLR", "URA"], ["원자력발전", "전력설비"]),
+    "로봇·자율주행": (["BOTZ", "ROBO"], ["로봇"]),
+    "AI 소프트웨어": (["IGV", "AIQ"], ["인공지능"]),
+    "AI 인프라·데이터센터": (["DTCR", "SRVR"], ["데이터센터"]),
+    "핀테크·디지털자산": (["ARKF", "FINX"], ["핀테크", "가상화폐"]),
+    "방산·드론": (["ITA", "XAR"], ["방위산업", "드론"]),
+    "클린에너지·ESS": (["ICLN", "TAN"], ["2차전지", "태양광"]),
+    "화장품·뷰티": ([], ["화장품"]),
+    "고배당": (["SCHD", "VYM"], []),
+}
+FILL_TARGET, FILL_MAX_ADD = 15, 8          # 섹터당 15개까지 채우되, 한 번에 최대 8개
+US_MIN_CAP, KR_MIN_CAP_KRW = 2e9, 3e11      # 미국 20억 달러 · 한국 3,000억 원 이상만
+
+def etf_top(sym):
+    r = get(f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{urllib.parse.quote(sym)}?modules=topHoldings" + cq())
+    try: hs = r.json()["quoteSummary"]["result"][0]["topHoldings"]["holdings"]
+    except Exception: return []
+    return [(h.get("symbol") or "").replace(".", "-") for h in hs if h.get("symbol") and re.fullmatch(r"[A-Z]{1,5}(\.[A-Z])?", h.get("symbol") or "")]
+
+def naver_text(url):
+    r = get(url)
+    if not r or r.status_code != 200: return ""
+    return r.content.decode("euc-kr", "ignore")
+
+NAVER_THEMES = None
+def naver_theme_stocks(words):
+    global NAVER_THEMES
+    if NAVER_THEMES is None:
+        NAVER_THEMES = {}
+        for page in range(1, 9):
+            html = naver_text(f"https://finance.naver.com/sise/theme.naver?&page={page}")
+            for no, name in re.findall(r'sise_group_detail\.naver\?type=theme&(?:amp;)?no=(\d+)"[^>]*>([^<]+)</a>', html):
+                NAVER_THEMES[name.strip()] = no
+        print("naver themes", len(NAVER_THEMES))
+    out = []
+    for name, no in NAVER_THEMES.items():
+        if not any(w in name for w in words): continue
+        html = naver_text(f"https://finance.naver.com/sise/sise_group_detail.naver?type=theme&no={no}")
+        for code, nm in re.findall(r'/item/main\.naver\?code=(\d{6})"[^>]*>([^<]+)</a>', html):
+            if (code, nm.strip()) not in out: out.append((code, nm.strip()))
+    return out
+
+def do_fill(catalog):
+    old = load(path("fill.json"), None)
+    if old and not stale("fill", 7 * 86400): return old
+    have = {x["t"] for s in catalog for x in s["stocks"]}
+    rate = (quotes(["KRW=X"]).get("KRW=X") or {}).get("price") or 1400
+    res = {}
+    for sec_name, (etfs, words) in FILL.items():
+        sec = next((s for s in catalog if s["name"] == sec_name), None)
+        if not sec: continue
+        room = min(FILL_MAX_ADD, FILL_TARGET - len(sec["stocks"]))
+        if room <= 0: res[sec_name] = []; continue
+        cand = {}
+        for e in etfs:
+            for t in etf_top(e):
+                if t not in have: cand.setdefault(t, {"t": t, "src": f"{e} 보유 상위"})
+        for code, nm in (naver_theme_stocks(words) if words else []):
+            for suf in (".KS", ".KQ"):
+                if code + suf in have: break
+            else: cand.setdefault(code, {"t": code, "ko": nm, "src": "네이버 테마", "kr": True})
+        # 한국 종목은 코스피(.KS)·코스닥(.KQ) 둘 다 물어봐서 시세가 나오는 쪽으로
+        ask = [c["t"] for c in cand.values() if not c.get("kr")] + [c["t"] + suf for c in cand.values() if c.get("kr") for suf in (".KS", ".KQ")]
+        qs = quotes(ask) if ask else {}
+        rows = []
+        for c in cand.values():
+            if c.get("kr"):
+                hit = next((c["t"] + suf for suf in (".KS", ".KQ") if (qs.get(c["t"] + suf) or {}).get("cap")), None)
+                if not hit: continue
+                cap = qs[hit]["cap"]
+                if cap < KR_MIN_CAP_KRW: continue
+                rows.append({"t": hit, "ko": c["ko"], "capUsd": cap / rate, "src": c["src"]})
+            else:
+                qq = qs.get(c["t"]) or {}
+                if (qq.get("cap") or 0) < US_MIN_CAP: continue
+                rows.append({"t": c["t"], "ko": qq.get("sname") or qq.get("name") or c["t"], "capUsd": qq["cap"], "src": c["src"]})
+        rows.sort(key=lambda x: -x["capUsd"])
+        res[sec_name] = rows[:room]
+        print("fill", sec_name, [r["t"] for r in res[sec_name]])
+    out = {"at": int(NOW * 1000), "sectors": res}
+    save(path("fill.json"), out); mark("fill")
+    return out
+
 # ───────── 신규 상장 (IPO) ─────────
 # 큰 신규 상장은 앱·웹앱이 알맞은 섹터에 자동으로 넣어 줌 (사용자가 지우면 다시 안 넣음)
 AUTO_ADD_CAP = 10e9          # 시총 100억 달러 이상이면 자동 추가
@@ -592,6 +765,12 @@ def main():
         for x in ipo.get("list", []):
             if x["sym"] not in stocks: stocks[x["sym"]] = {"t": x["sym"], "ko": x["ko"], "etf": False}
     except Exception as e: print("ipo fail", e)
+    try:
+        fill = do_fill(cat)
+        for lst in fill.get("sectors", {}).values():
+            for x in lst:
+                if x["t"] not in stocks: stocks[x["t"]] = {"t": x["t"], "ko": x["ko"], "etf": False}
+    except Exception as e: print("fill fail", e)
     syms = list(stocks)
     chart_syms = list(dict.fromkeys(syms + crowd_syms))
     print("crumb", bool(CRUMB), "tickers", len(syms))
@@ -696,6 +875,8 @@ def main():
     except Exception as e: print('disc fail', e)
     try: do_hub(static)
     except Exception as e: print('hub fail', e)
+    try: do_signals(stocks, q)
+    except Exception as e: print('signals fail', e)
 
     meta["updatedAt"] = int(NOW * 1000)
     save(path("meta.json"), meta)
