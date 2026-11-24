@@ -600,7 +600,8 @@ def naver_theme_stocks(words):
         NAVER_THEMES = {}
         for page in range(1, 9):
             html = naver_text(f"https://finance.naver.com/sise/theme.naver?&page={page}")
-            if page == 1: print("naver theme page", len(html))
+            if page == 1:
+                k = html.find("group_detail"); print("naver theme page", len(html), repr(html[max(0, k - 120):k + 160]))
             for no, name in re.findall(r'sise_group_detail\.(?:naver|nhn)\?type=theme&(?:amp;)?no=(\d+)[^>]*>\s*([^<]+?)\s*</a>', html):
                 NAVER_THEMES[name.strip()] = no
         print("naver themes", len(NAVER_THEMES))
