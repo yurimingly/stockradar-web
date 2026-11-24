@@ -568,7 +568,7 @@ FILL = {  # 섹터: ([미국 테마 ETF], [네이버 테마 이름에 들어간 
     "화장품·뷰티": ([], ["화장품"], r"cosmetic|beauty|personal products"),
     "고배당": (["SCHD", "VYM", "HDV"], [], r""),
 }
-FILL_VER = 4
+FILL_VER = 5
 FILL_TARGET, FILL_MAX_ADD = 15, 8          # 섹터당 15개까지 채우되, 한 번에 최대 8개
 US_MIN_CAP, KR_MIN_CAP_KRW = 2e9, 3e11      # 미국 20억 달러 · 한국 3,000억 원 이상만
 
@@ -595,26 +595,36 @@ def naver_text(url):
 
 NAVER_THEMES = None
 def naver_theme_stocks(words):
+    """네이버 증권 테마 → 종목 (m.stock.naver.com 공개 API)"""
     global NAVER_THEMES
     if NAVER_THEMES is None:
         NAVER_THEMES = {}
-        for page in range(1, 9):
-            html = naver_text(f"https://finance.naver.com/sise/theme.naver?&page={page}")
-            if page == 1:
-                print("naver theme page", len(html), sorted(set(re.findall(r'https?://[a-z.\-]*naver\.com/[a-zA-Z0-9_/\-]*api[a-zA-Z0-9_/\-.?=&]*', html)))[:15])
-                for m in re.finditer(r'theme', html)[:0] if False else list(re.finditer(r'[Tt]heme[A-Za-z]*', html))[:6]: print("  ..", repr(html[max(0, m.start() - 80):m.start() + 120]))
-                for u in ["https://m.stock.naver.com/api/stocks/theme?page=1&pageSize=100", "https://m.stock.naver.com/api/stocks/theme/list?page=1&pageSize=100",
-                          "https://stock.naver.com/api/domestic/theme?page=1&pageSize=50", "https://m.stock.naver.com/front-api/theme/list?page=1&pageSize=50"]:
-                    rr = get(u); print("  try", u, rr.status_code if rr else None, (rr.text[:200] if rr else ""))
-            for no, name in re.findall(r'sise_group_detail\.(?:naver|nhn)\?type=theme&(?:amp;)?no=(\d+)[^>]*>\s*([^<]+?)\s*</a>', html):
-                NAVER_THEMES[name.strip()] = no
+        for page in range(1, 5):
+            r = get(f"https://m.stock.naver.com/api/stocks/theme?page={page}&pageSize=100")
+            try: groups = r.json().get("groups") or []
+            except Exception: groups = []
+            for g in groups: NAVER_THEMES[g["name"]] = g["no"]
+            if len(groups) < 100: break
         print("naver themes", len(NAVER_THEMES))
-    out = []
+    out, dbg = [], True
     for name, no in NAVER_THEMES.items():
         if not any(w in name for w in words): continue
-        html = naver_text(f"https://finance.naver.com/sise/sise_group_detail.naver?type=theme&no={no}")
-        for code, nm in re.findall(r'/item/main\.(?:naver|nhn)\?code=(\d{6})[^>]*>\s*([^<]+?)\s*</a>', html):
-            if (code, nm.strip()) not in out: out.append((code, nm.strip()))
+        r = get(f"https://m.stock.naver.com/api/stocks/theme/{no}?page=1&pageSize=100")
+        try: j = r.json()
+        except Exception: j = {}
+        found = []
+        def visit(x):
+            if isinstance(x, dict):
+                code = x.get("itemCode") or x.get("reutersCode") or x.get("code")
+                nm = x.get("stockName") or x.get("itemName") or x.get("name")
+                if isinstance(code, str) and re.fullmatch(r"\d{6}", code) and isinstance(nm, str): found.append((code, nm.strip()))
+                for v in x.values(): visit(v)
+            elif isinstance(x, list):
+                for v in x: visit(v)
+        visit(j)
+        if dbg: print("  naver theme", name, no, len(found), str(j)[:160]); dbg = False
+        for f in found:
+            if f not in out: out.append(f)
     return out
 
 def do_fill(catalog):
