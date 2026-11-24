@@ -568,7 +568,7 @@ FILL = {  # 섹터: ([미국 테마 ETF], [네이버 테마 이름에 들어간 
     "화장품·뷰티": ([], ["화장품"], r"cosmetic|beauty|personal products"),
     "고배당": (["SCHD", "VYM", "HDV"], [], r""),
 }
-FILL_VER = 3
+FILL_VER = 4
 FILL_TARGET, FILL_MAX_ADD = 15, 8          # 섹터당 15개까지 채우되, 한 번에 최대 8개
 US_MIN_CAP, KR_MIN_CAP_KRW = 2e9, 3e11      # 미국 20억 달러 · 한국 3,000억 원 이상만
 
@@ -601,7 +601,11 @@ def naver_theme_stocks(words):
         for page in range(1, 9):
             html = naver_text(f"https://finance.naver.com/sise/theme.naver?&page={page}")
             if page == 1:
-                k = html.find("group_detail"); print("naver theme page", len(html), repr(html[max(0, k - 120):k + 160]))
+                print("naver theme page", len(html), sorted(set(re.findall(r'https?://[a-z.\-]*naver\.com/[a-zA-Z0-9_/\-]*api[a-zA-Z0-9_/\-.?=&]*', html)))[:15])
+                for m in re.finditer(r'theme', html)[:0] if False else list(re.finditer(r'[Tt]heme[A-Za-z]*', html))[:6]: print("  ..", repr(html[max(0, m.start() - 80):m.start() + 120]))
+                for u in ["https://m.stock.naver.com/api/stocks/theme?page=1&pageSize=100", "https://m.stock.naver.com/api/stocks/theme/list?page=1&pageSize=100",
+                          "https://stock.naver.com/api/domestic/theme?page=1&pageSize=50", "https://m.stock.naver.com/front-api/theme/list?page=1&pageSize=50"]:
+                    rr = get(u); print("  try", u, rr.status_code if rr else None, (rr.text[:200] if rr else ""))
             for no, name in re.findall(r'sise_group_detail\.(?:naver|nhn)\?type=theme&(?:amp;)?no=(\d+)[^>]*>\s*([^<]+?)\s*</a>', html):
                 NAVER_THEMES[name.strip()] = no
         print("naver themes", len(NAVER_THEMES))
