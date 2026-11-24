@@ -568,7 +568,7 @@ FILL = {  # 섹터: ([미국 테마 ETF], [네이버 테마 이름에 들어간 
     "화장품·뷰티": ([], ["화장품"], r"cosmetic|beauty|personal products"),
     "고배당": (["SCHD", "VYM", "HDV"], [], r""),
 }
-FILL_VER = 2
+FILL_VER = 3
 FILL_TARGET, FILL_MAX_ADD = 15, 8          # 섹터당 15개까지 채우되, 한 번에 최대 8개
 US_MIN_CAP, KR_MIN_CAP_KRW = 2e9, 3e11      # 미국 20억 달러 · 한국 3,000억 원 이상만
 
