@@ -1158,7 +1158,7 @@ function drawer(open) {
     <div class="grp">보기</div>${item("★", "관심 종목", "tab:-2", home && t === -2, S.favs.size)}${item("🧠", "대가별 종목 순위", "tab:-3", home && t === -3, STATIC.gurus.length + "명")}${item("📋", "전체 종목", "tab:-1", home && t === -1)}
     ${S.sectors.map((s, i) => item(s.emoji, s.name, "tab:" + i, home && t === i, s.stocks.length)).join("")}<div class="divider"></div>
     <div class="grp">공부하기</div>${item("⚖️", "종목 비교 (PER·PBR·성장률…)", "go:compare/" + (t >= 0 ? t : -2) + "/0")}${item("🔭", "종목 발굴 (화제·스크리너·전문가)", "go:discover")}
-    ${item("🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals")}${item("🐜", "서학개미·상위 1% 고수 픽", "go:crowd")}${item("📰", "뉴스·기업분석 모아보기", "go:news")}
+    ${item("🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals")}${item("🟢", "매수 신호 많은 종목", "go:screener")}${item("🐜", "서학개미·상위 1% 고수 픽", "go:crowd")}${item("📰", "뉴스·기업분석 모아보기", "go:news")}
     ${item("🇺🇸", "S&P 500 · 편입/퇴출", "go:sp500")}${item("📖", "지표 사전 (PER·PBR·EPS…)", "go:glossary")}${item("📚", "대가들의 투자법·책", "go:gurus")}<div class="divider"></div>
     <div class="grp">관리</div>${item("＋", "종목 추가 (섹터 자동 분류)", "addstock")}${item("＋", "섹터 추가", "addsec")}
     ${t >= 0 && S.sectors[t] ? item("✏️", `'${S.sectors[t].name}' 이름 바꾸기`, "rensec") + item("🗑", `'${S.sectors[t].name}' 삭제`, "delsec") : ""}
@@ -1197,8 +1197,60 @@ async function render(force) {
     case "glossary": return renderGlossary();
     case "gurus": return renderGuruIntro(a);
     case "sectors": return renderSectors();
+    case "screener": return renderScreener();
   }
   go("");
+}
+
+
+// ═════════════ 매수 신호 많은 종목 ═════════════
+const SC = { scope: LS.get("scScope", 0), min: LS.get("scMin", 2) };
+const SIG_COLOR = { 2: GOOD, 1: AMB, 0: "#3A3F52", "-1": "var(--red)" };
+async function renderScreener() {
+  setHeader("🟢 매수 신호 많은 종목", true);
+  $("#app").innerHTML = chipsHtml([[0, "⭐ 내 종목"], [1, "🇺🇸 S&P 500"], [2, "전체"]], SC.scope, "scs") + `<div style="height:6px"></div>` +
+    chipsHtml([[1, "🟢 1개 이상"], [2, "🟢 2개 이상"], [3, "🟢 3개 이상"], [4, "🟢 4개 이상"]], SC.min, "scm") + `<div id="scBody" style="margin-top:8px"><div class="spin">신호 불러오는 중…</div></div>`;
+  bindChips($("#app"), "scs", v => { SC.scope = v; LS.set("scScope", v); renderScreener(); });
+  bindChips($("#app"), "scm", v => { SC.min = v; LS.set("scMin", v); renderScreener(); });
+  const d = await data("signals.json", 600_000);
+  if (!d?.rows) { $("#scBody").innerHTML = note("아직 계산된 신호가 없어요. GitHub이 20분마다 계산해요."); return; }
+  const mine = allStocks();
+  const list = Object.entries(d.rows).filter(([sym, r]) => SC.scope === 2 || (SC.scope === 0 ? mine.has(sym) : r.sp))
+    .map(([sym, r]) => ({ sym, ...r, n: mine.get(sym)?.ko || r.n, g: r.s.filter(x => x[2] === 2).length, y: r.s.filter(x => x[2] === 1).length, total: r.s.length }))
+    .filter(r => r.g >= SC.min)
+    .sort((a, b) => b.g - a.g || b.y - a.y || parseFloat(a.s.find(x => x[0] === "MDD")?.[1] || 0) - parseFloat(b.s.find(x => x[0] === "MDD")?.[1] || 0));
+  let h = `<div class="card small" style="line-height:1.5">종목마다 앱의 매수 타이밍 신호 5가지(RSI 일봉·주봉, 고점 대비 낙폭, 200일선, 200주선)를 계산해서 <b class="g">초록(매수 구간)</b>이 많이 켜진 순서로 모았어요.<br><span class="sub">개별 종목은 이유가 있어서 빠지는 경우가 많아요(실적 악화 등). 신호가 많다고 바로 사기보다 뉴스·지표를 먼저 확인하세요. ${ago(d.at)} 계산 · 20분마다 갱신</span></div>`;
+  if (!list.length) h += note(`조건에 맞는 종목이 없어요. 위에서 '🟢 ${Math.max(1, SC.min - 1)}개 이상'으로 낮춰 보세요.`);
+  let last = -1;
+  for (const r of list.slice(0, 300)) {
+    if (r.g !== last) { last = r.g; const cnt = list.filter(x => x.g === r.g).length;
+      h += `<div class="b" style="margin:14px 4px 6px;font-size:15px;color:${r.g >= 4 ? GOOD : r.g >= 3 ? "#7BD88F" : "var(--text)"}">${r.g === r.total ? `🟢 ${r.g}개 모두 초록` : `🟢 ${r.g}개`} <span class="sub">· ${cnt}종목${r.g >= 4 ? " · 여러 지표가 같이 바닥권" : r.g === 3 ? " · 비중 크게 고려 구간" : r.g === 2 ? " · 매수 준비" : ""}</span></div>`; }
+    h += `<div class="card" style="padding:11px 14px;margin-bottom:6px" data-open="${esc(r.sym)}" data-name="${esc(r.n)}"><div class="between"><div style="min-width:0"><b>${esc(r.sym)}</b>${r.my ? ` <span class="small g">✓ 내 목록</span>` : ""}<div class="sub ell">${esc(r.n)}${r.sec ? " · " + esc(gicsKo(r.sec)) : ""}</div></div>
+      <div style="text-align:right;flex:none"><b class="g">🟢${r.g}</b> <span style="color:${AMB}">🟡${r.y}</span><div class="sub">/ ${r.total}개</div></div></div>
+      <div class="chips" style="margin-top:6px;flex-wrap:wrap;overflow:visible">${r.s.map(([n, v, st]) => `<span class="badge" style="background:${SIG_COLOR[st]};font-size:11px;padding:3px 7px">${esc(n)} ${esc(v)}</span>`).join("")}</div></div>`;
+  }
+  if (list.length > 300) h += note(`상위 300개만 보여요 (전체 ${list.length}개).`);
+  h += note("초록 = 매수 구간 · 노랑 = 관심 · 회색 = 해당 없음 · 빨강 = 과열. 공포·탐욕 지수와 VIX는 시장 전체 지표라 종목별 개수에는 넣지 않았어요 (매수 타이밍 신호 화면에서 확인).");
+  $("#scBody").innerHTML = h;
+}
+
+// ───────────── 섹터 추천 종목 자동 채우기 ─────────────
+// 섹터마다 대표 테마 ETF 보유 상위(미국)·네이버 테마(한국) 중 시총 큰 종목을 채워 줌. 한 번 넣은(또는 지운) 종목은 다시 건드리지 않음
+async function applyFill() {
+  const f = await data("fill.json", 3600_000); if (!f?.sectors) return;
+  const seen = new Set(LS.get("fillSeen", [])), added = [];
+  for (const [name, list] of Object.entries(f.sectors)) {
+    const sec = S.sectors.find(s => s.name === name); if (!sec) continue;
+    for (const x of list) {
+      if (seen.has(x.t)) continue;
+      seen.add(x.t);
+      if (sectorIdx(x.t) >= 0 || S.deleted.has(name + ":" + x.t)) continue;
+      sec.stocks.push({ t: x.t, ko: x.ko, desc: `⭐ 추천 · ${x.src}`, pts: [], etf: false, auto: true });
+      added.push(x.ko);
+    }
+  }
+  LS.set("fillSeen", [...seen]);
+  if (added.length) { S.save(); toast(`⭐ 섹터별 추천 종목 ${added.length}개를 채웠어요`); if (route().name === "home") renderHome(true); }
 }
 
 // ───────────── 신규 상장 자동 추가 ─────────────
@@ -1227,6 +1279,6 @@ async function applyIpos() {
   await Promise.all([loadCatalog(), loadStatic()]);
   if (!location.hash) { const last = LS.get("lastHash", ""); if (last && last !== "#/") { location.hash = last; return; } }
   render();
-  applyIpos();
+  applyIpos().then(applyFill);
 })();
 document.addEventListener("visibilitychange", () => { if (!document.hidden && route().name === "home") refreshQuotes(false); });

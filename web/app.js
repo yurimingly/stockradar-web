@@ -660,6 +660,7 @@ async function renderSignals() {
   setHeader("🚦 매수 타이밍 신호", true);
   const [sym, , label, us] = MARKETS[sigMarket];
   $("#app").innerHTML = `<div class="chips">${MARKETS.map((m, i) => `<button class="chip ${i === sigMarket ? "on" : ""}" data-m="${i}">${m[1]}</button>`).join("")}</div>
+    <a class="card row" href="#/screener" style="text-decoration:none;margin-top:8px;padding:12px 14px"><span style="font-size:20px">🟢</span><div class="grow"><b class="ac">매수 신호 많은 종목 보기</b><div class="sub">내 종목·S&P 500 중 초록(매수 구간)이 여러 개 켜진 종목</div></div><b class="muted">›</b></a>
     <div id="sigMain" style="margin-top:8px"><div class="spin">지표 불러오는 중…</div></div><div id="sigHist"></div>`;
   $("#app").querySelectorAll("[data-m]").forEach(b => b.onclick = () => { sigMarket = +b.dataset.m; renderSignals(); });
   const [d, w, vix, fg] = await Promise.all([Y.chart(sym, "1y", "1d"), Y.chart(sym, "5y", "1wk"), Y.chart("^VIX", "5d", "1d"), Sig.fearGreed()]);

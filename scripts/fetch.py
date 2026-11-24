@@ -551,22 +551,24 @@ def do_signals(stocks, q):
 
 # ───────── 섹터 추천 종목 자동 채우기 (일주일에 1번) ─────────
 # 미국: 섹터 대표 테마 ETF의 보유 상위 종목 · 한국: 네이버 증권 '테마별 시세'
-FILL = {  # 섹터: ([미국 테마 ETF], [네이버 테마 이름에 들어간 말])
-    "양자컴퓨팅": (["QTUM"], ["양자"]),
-    "사이버보안": (["CIBR", "HACK"], ["보안주(정보)", "정보보안"]),
-    "생명과학": (["XBI", "IBB"], ["바이오시밀러", "유전자 치료"]),
-    "AI·반도체": (["SMH", "SOXX"], ["HBM", "반도체 장비"]),
-    "우주항공": (["UFO", "ARKX"], ["우주항공"]),
-    "원자력·전력": (["NLR", "URA"], ["원자력발전", "전력설비"]),
-    "로봇·자율주행": (["BOTZ", "ROBO"], ["로봇"]),
-    "AI 소프트웨어": (["IGV", "AIQ"], ["인공지능"]),
-    "AI 인프라·데이터센터": (["DTCR", "SRVR"], ["데이터센터"]),
-    "핀테크·디지털자산": (["ARKF", "FINX"], ["핀테크", "가상화폐"]),
-    "방산·드론": (["ITA", "XAR"], ["방위산업", "드론"]),
-    "클린에너지·ESS": (["ICLN", "TAN"], ["2차전지", "태양광"]),
-    "화장품·뷰티": ([], ["화장품"]),
-    "고배당": (["SCHD", "VYM"], []),
+FILL = {  # 섹터: ([미국 테마 ETF], [네이버 테마 이름에 들어간 말], 업종·사업설명이 맞아야 하는 조건)
+    # ETF 보유 종목엔 테마와 상관없는 대형주(아마존 등)도 섞여 있어서, 업종·사업설명이 섹터와 맞는 종목만 받음
+    "양자컴퓨팅": (["QTUM"], ["양자"], r"quantum"),
+    "사이버보안": (["CIBR", "HACK", "BUG"], ["보안"], r"cyber|security"),
+    "생명과학": (["XBI", "IBB"], ["바이오", "유전자"], r"biotech|drug manufacturers|medical|diagnostic"),
+    "AI·반도체": (["SMH", "SOXX"], ["HBM", "반도체"], r"semiconductor"),
+    "우주항공": (["UFO", "ARKX", "ROKT"], ["우주"], r"space|satellite|launch vehicle"),
+    "원자력·전력": (["NLR", "URA", "NUKZ", "GRID"], ["원자력", "전력설비", "전선"], r"uranium|nuclear|utilities|electrical equipment|power generation"),
+    "로봇·자율주행": (["BOTZ", "ROBO"], ["로봇"], r"robot|automation|autonomous"),
+    "AI 소프트웨어": (["IGV", "AIQ", "WCLD"], ["인공지능"], r"software"),
+    "AI 인프라·데이터센터": (["DTCR", "SRVR"], ["데이터센터"], r"data cent"),
+    "핀테크·디지털자산": (["ARKF", "FINX", "IPAY"], ["핀테크", "가상화폐", "스테이블"], r"credit services|capital markets|financial data|payment|crypto|blockchain|stablecoin"),
+    "방산·드론": (["ITA", "XAR", "PPA"], ["방위산업", "드론"], r"aerospace & defense|defense"),
+    "클린에너지·ESS": (["ICLN", "TAN", "QCLN"], ["2차전지", "태양광", "ESS"], r"solar|renewable|battery|batteries|energy storage|fuel cell"),
+    "화장품·뷰티": ([], ["화장품"], r"cosmetic|beauty|personal products"),
+    "고배당": (["SCHD", "VYM", "HDV"], [], r""),
 }
+FILL_VER = 2
 FILL_TARGET, FILL_MAX_ADD = 15, 8          # 섹터당 15개까지 채우되, 한 번에 최대 8개
 US_MIN_CAP, KR_MIN_CAP_KRW = 2e9, 3e11      # 미국 20억 달러 · 한국 3,000억 원 이상만
 
@@ -575,6 +577,16 @@ def etf_top(sym):
     try: hs = r.json()["quoteSummary"]["result"][0]["topHoldings"]["holdings"]
     except Exception: return []
     return [(h.get("symbol") or "").replace(".", "-") for h in hs if h.get("symbol") and re.fullmatch(r"[A-Z]{1,5}(\.[A-Z])?", h.get("symbol") or "")]
+
+PROFILE = {}
+def fits(sym, pattern):
+    """업종 + 사업설명 앞부분이 섹터 조건에 맞는지"""
+    if sym not in PROFILE:
+        r = get(f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{urllib.parse.quote(sym)}?modules=assetProfile" + cq())
+        try: ap = r.json()["quoteSummary"]["result"][0].get("assetProfile") or {}
+        except Exception: ap = {}
+        PROFILE[sym] = f"{ap.get('sector', '')} {ap.get('industry', '')} {(ap.get('longBusinessSummary') or '')[:400]}".lower()
+    return bool(re.search(pattern, PROFILE[sym]))
 
 def naver_text(url):
     r = get(url)
@@ -588,24 +600,25 @@ def naver_theme_stocks(words):
         NAVER_THEMES = {}
         for page in range(1, 9):
             html = naver_text(f"https://finance.naver.com/sise/theme.naver?&page={page}")
-            for no, name in re.findall(r'sise_group_detail\.naver\?type=theme&(?:amp;)?no=(\d+)"[^>]*>([^<]+)</a>', html):
+            if page == 1: print("naver theme page", len(html))
+            for no, name in re.findall(r'sise_group_detail\.(?:naver|nhn)\?type=theme&(?:amp;)?no=(\d+)[^>]*>\s*([^<]+?)\s*</a>', html):
                 NAVER_THEMES[name.strip()] = no
         print("naver themes", len(NAVER_THEMES))
     out = []
     for name, no in NAVER_THEMES.items():
         if not any(w in name for w in words): continue
         html = naver_text(f"https://finance.naver.com/sise/sise_group_detail.naver?type=theme&no={no}")
-        for code, nm in re.findall(r'/item/main\.naver\?code=(\d{6})"[^>]*>([^<]+)</a>', html):
+        for code, nm in re.findall(r'/item/main\.(?:naver|nhn)\?code=(\d{6})[^>]*>\s*([^<]+?)\s*</a>', html):
             if (code, nm.strip()) not in out: out.append((code, nm.strip()))
     return out
 
 def do_fill(catalog):
     old = load(path("fill.json"), None)
-    if old and not stale("fill", 7 * 86400): return old
+    if old and old.get("v") == FILL_VER and not stale("fill", 7 * 86400): return old
     have = {x["t"] for s in catalog for x in s["stocks"]}
     rate = (quotes(["KRW=X"]).get("KRW=X") or {}).get("price") or 1400
     res = {}
-    for sec_name, (etfs, words) in FILL.items():
+    for sec_name, (etfs, words, must) in FILL.items():
         sec = next((s for s in catalog if s["name"] == sec_name), None)
         if not sec: continue
         room = min(FILL_MAX_ADD, FILL_TARGET - len(sec["stocks"]))
@@ -632,11 +645,13 @@ def do_fill(catalog):
             else:
                 qq = qs.get(c["t"]) or {}
                 if (qq.get("cap") or 0) < US_MIN_CAP: continue
+                if must and not fits(c["t"], must): continue
+                if not must and sec_name == "고배당" and not ((qq.get("divRate") or 0) / (qq.get("price") or 1) >= 0.03): continue
                 rows.append({"t": c["t"], "ko": qq.get("sname") or qq.get("name") or c["t"], "capUsd": qq["cap"], "src": c["src"]})
         rows.sort(key=lambda x: -x["capUsd"])
         res[sec_name] = rows[:room]
         print("fill", sec_name, [r["t"] for r in res[sec_name]])
-    out = {"at": int(NOW * 1000), "sectors": res}
+    out = {"at": int(NOW * 1000), "v": FILL_VER, "sectors": res}
     save(path("fill.json"), out); mark("fill")
     return out
 
