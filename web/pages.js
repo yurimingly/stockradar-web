@@ -1204,12 +1204,15 @@ async function render(force) {
 
 
 // ═════════════ 매수 신호 많은 종목 ═════════════
-const SC = { scope: LS.get("scScope", 0), min: LS.get("scMin", 2) };
+const SC = { scope: LS.get("scScope", 0), min: LS.get("scMin", 2), view: 0, week: null };
 const SIG_COLOR = { 2: GOOD, 1: AMB, 0: "#3A3F52", "-1": "var(--red)" };
 async function renderScreener() {
   setHeader("🟢 매수 신호 많은 종목", true);
-  $("#app").innerHTML = chipsHtml([[0, "⭐ 내 종목"], [1, "🇺🇸 S&P 500"], [2, "전체"]], SC.scope, "scs") + `<div style="height:6px"></div>` +
+  const viewChips = chipsHtml([[0, "🟢 지금 신호"], [1, "📅 주별 기록 · 맞았나?"]], SC.view || 0, "scv") + `<div style="height:6px"></div>`;
+  if (SC.view === 1) return renderSigHistory(viewChips);
+  $("#app").innerHTML = viewChips + chipsHtml([[0, "⭐ 내 종목"], [1, "🇺🇸 S&P 500"], [2, "전체"]], SC.scope, "scs") + `<div style="height:6px"></div>` +
     chipsHtml([[1, "🟢 1개 이상"], [2, "🟢 2개 이상"], [3, "🟢 3개 이상"], [4, "🟢 4개 이상"]], SC.min, "scm") + `<div id="scBody" style="margin-top:8px"><div class="spin">신호 불러오는 중…</div></div>`;
+  bindChips($("#app"), "scv", v => { SC.view = v; renderScreener(); });
   bindChips($("#app"), "scs", v => { SC.scope = v; LS.set("scScope", v); renderScreener(); });
   bindChips($("#app"), "scm", v => { SC.min = v; LS.set("scMin", v); renderScreener(); });
   const d = await data("signals.json", 600_000);
@@ -1232,6 +1235,39 @@ async function renderScreener() {
   if (list.length > 300) h += note(`상위 300개만 보여요 (전체 ${list.length}개).`);
   h += note("초록 = 매수 구간 · 노랑 = 관심 · 회색 = 해당 없음 · 빨강 = 과열. 공포·탐욕 지수와 VIX는 시장 전체 지표라 종목별 개수에는 넣지 않았어요 (매수 타이밍 신호 화면에서 확인).");
   $("#scBody").innerHTML = h;
+}
+
+// 주별 기록: 그 주에 초록이 켜졌던 종목을 그때 가격으로 저장해 두고, 지금까지 수익률로 '맞았는지' 확인
+async function renderSigHistory(viewChips) {
+  const idx = await data("history/signals/index.json", 600_000) || [];
+  if (!idx.length) { $("#app").innerHTML = viewChips + note("아직 저장된 주가 없어요. 이번 주 기록은 곧 저장돼요 (매주 한 번 자동 저장)."); bindChips($("#app"), "scv", v => { SC.view = v; renderScreener(); }); return; }
+  if (!SC.week || !idx.some(x => x.week === SC.week)) SC.week = idx[0].week;
+  $("#app").innerHTML = viewChips + chipsHtml(idx.map(x => [x.week, `${x.date.slice(5).replace("-", "/")} 주`]), SC.week, "scw") + `<div style="height:6px"></div>` +
+    chipsHtml([[0, "⭐ 내 종목"], [1, "🇺🇸 S&P 500"], [2, "전체"]], SC.scope, "scs") + `<div id="shBody" style="margin-top:8px"><div class="spin">불러오는 중…</div></div>`;
+  bindChips($("#app"), "scv", v => { SC.view = v; renderScreener(); });
+  bindChips($("#app"), "scw", v => { SC.week = v; renderScreener(); });
+  bindChips($("#app"), "scs", v => { SC.scope = v; LS.set("scScope", v); renderScreener(); });
+  const [wk, now] = await Promise.all([data(`history/signals/${SC.week}.json`, 3600_000), data("signals.json", 600_000)]);
+  if (!wk) { $("#shBody").innerHTML = note("이 주 기록을 불러오지 못했어요."); return; }
+  const mine = allStocks(), cur = s => now?.rows?.[s]?.p ?? Q[s]?.price;
+  const ret = (a, b) => a && b ? (b / a - 1) * 100 : null;
+  const spRet = ret(wk.bench?.["^GSPC"], now?.bench?.["^GSPC"]), ksRet = ret(wk.bench?.["^KS11"], now?.bench?.["^KS11"]);
+  const rows = Object.entries(wk.rows).filter(([sym, r]) => SC.scope === 2 || (SC.scope === 0 ? (r.my || mine.has(sym)) : r.sp))
+    .map(([sym, r]) => ({ sym, ...r, n: mine.get(sym)?.ko || r.n, now: cur(sym), r: ret(r.p, cur(sym)) })).filter(x => x.r != null);
+  const days = Math.max(0, Math.round((Date.now() - wk.at) / 86400000));
+  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  let h = `<div class="card"><div class="b ac">${wk.date} (${days}일 전) 신호 → 지금까지 수익률</div><div class="sub" style="margin-top:3px">그 주에 초록이 켜졌던 종목을 그때 가격으로 샀다면 지금 몇 %인지예요. 같은 기간 S&P 500 ${spRet == null ? "—" : pct(spRet)}${ksRet == null ? "" : " · 코스피 " + pct(ksRet)}</div>`;
+  h += `<table class="mini" style="margin-top:8px"><tr><th>초록 개수</th><th>종목</th><th>평균 수익률</th><th>오른 비율</th><th>S&P 대비</th></tr>`;
+  const groups = [5, 4, 3, 2, 1].map(g => { const l = rows.filter(x => x.g === g).map(x => x.r); return [g, l]; }).filter(([, l]) => l.length)
+    .sort((a, b) => avg(b[1]) - avg(a[1]));   // 수익률 높은 순
+  h += groups.map(([g, l]) => { const a = avg(l), win = l.filter(x => x > 0).length / l.length * 100;
+    return `<tr><td class="b">🟢 ${g}개</td><td>${l.length}</td><td class="b ${cls(a)}">${pct(a)}</td><td>${Math.round(win)}%</td><td class="${cls(a - (spRet ?? 0))}">${spRet == null ? "—" : pct(a - spRet)}</td></tr>`; }).join("") + `</table>`;
+  h += `<div class="sub" style="margin-top:6px">초록이 많을수록 수익률이 높으면 신호가 잘 맞은 거예요. 기간이 짧으면 우연일 수 있어서 몇 주 이상 쌓아서 보는 게 좋아요.</div></div>`;
+  if (!rows.length) h += note("이 조건에 맞는 종목이 없어요.");
+  h += `<div class="b" style="margin:12px 4px 6px">종목별 (수익률 높은 순)</div>` + rows.sort((a, b) => b.r - a.r).map(x =>
+    `<div class="card row" style="padding:10px 14px;margin-bottom:5px" data-open="${esc(x.sym)}" data-name="${esc(x.n)}"><div class="grow" style="min-width:0"><b>${esc(x.sym)}</b> <span class="small g">🟢${x.g}</span><div class="sub ell">${esc(x.n)} · ${money(x.p, x.sym)} → ${money(x.now, x.sym)}</div></div><b class="${cls(x.r)}" style="font-size:15px">${pct(x.r)}</b></div>`).join("");
+  h += note("매주 한 번 자동 저장돼요. 기록은 계속 쌓이고 지워지지 않아요. 투자 판단의 참고용이에요.");
+  $("#shBody").innerHTML = h;
 }
 
 // ───────────── 섹터 추천 종목 자동 채우기 ─────────────

@@ -514,6 +514,27 @@ def closes_since(f, days):
     cut = NOW - days * 86400
     return [c for t, c in zip(d["t"], d["c"]) if t >= cut and c is not None]
 
+BENCH = ["^GSPC", "^IXIC", "^KS11"]
+HIST_DIR = "history/signals"   # 주별 기록은 main 브랜치에 커밋해서 영구 보관
+
+def weekly_snapshot(rows, bench):
+    """매주 한 번(한국시간 기준 그 주 첫 실행) 신호 초록 1개 이상 종목과 그때 가격을 저장 → 나중에 수익률로 '맞았는지' 확인"""
+    kst = time.gmtime(NOW + 9 * 3600)
+    y, w, _ = __import__("datetime").date(kst.tm_year, kst.tm_mon, kst.tm_mday).isocalendar()
+    key = f"{y}-W{w:02d}"
+    os.makedirs(HIST_DIR, exist_ok=True)
+    idx_path = os.path.join(HIST_DIR, "index.json")
+    idx = load(idx_path, []) or []
+    if any(x["week"] == key for x in idx): return
+    snap = {sym: {"n": r["n"], "my": r["my"], "sp": r["sp"], "p": r["p"], "g": sum(1 for x in r["s"] if x[2] == 2),
+                  "y": sum(1 for x in r["s"] if x[2] == 1), "s": r["s"]}
+            for sym, r in rows.items() if any(x[2] == 2 for x in r["s"]) and r.get("p")}
+    date = time.strftime("%Y-%m-%d", kst)
+    save(os.path.join(HIST_DIR, key + ".json"), {"week": key, "date": date, "at": int(NOW * 1000), "bench": bench, "rows": snap})
+    idx.insert(0, {"week": key, "date": date, "count": len(snap), "g5": sum(1 for r in snap.values() if r["g"] >= 5)})
+    save(idx_path, idx)
+    print("weekly snapshot", key, len(snap))
+
 def do_signals(stocks, q):
     """내 목록 + S&P 500 전 종목의 신호를 계산해서 signals.json 으로 (앱·웹앱의 '매수 신호 많은 종목' 화면용)"""
     sp = load(path("sp500.json"), {}) or {}
@@ -544,8 +565,10 @@ def do_signals(stocks, q):
         sig = price_signals(daily, weekly, px, sym.startswith("^"), sym)
         if not sig: continue
         rows[sym] = {"n": st.get("ko") or names.get(sym, sym), "etf": bool(st.get("etf")), "my": sym in stocks, "sp": sym in names,
-                     "sec": sectors.get(sym, ""), "s": sig}
-    save(path("signals.json"), {"at": int(NOW * 1000), "rows": rows})
+                     "sec": sectors.get(sym, ""), "s": sig, "p": rnd(px)}
+    bench = {b: rnd((q.get(b) or {}).get("price")) for b in BENCH}
+    save(path("signals.json"), {"at": int(NOW * 1000), "rows": rows, "bench": bench})
+    weekly_snapshot(rows, bench)
     good = sorted(rows.items(), key=lambda kv: -sum(1 for x in kv[1]["s"] if x[2] == 2))[:5]
     print("signals", len(rows), [(k, sum(1 for x in v["s"] if x[2] == 2)) for k, v in good])
 

@@ -33,6 +33,13 @@ jobs:
       - name: 사이트 만들기
         run: |
           mkdir _site && cp -r web/* _site/ && cp -r data _site/data && touch _site/.nojekyll
+          if [ -d history ]; then cp -r history _site/data/history; fi
+      - name: 주별 매수 신호 기록 보관 (main 브랜치에 커밋)
+        run: |
+          if [ -n "$(git status --porcelain history)" ]; then
+            git config user.name github-actions[bot]; git config user.email github-actions[bot]@users.noreply.github.com
+            git add history && git commit -m "주별 매수 신호 기록" && git pull --rebase -q origin main && git push origin HEAD:main
+          fi
       - name: gh-pages 브랜치로 배포
         uses: peaceiris/actions-gh-pages@v4
         with:
