@@ -544,7 +544,7 @@ function renderHome(quotesOnly, force) {
       sum = `${baseLabel(qs)} · ${H.pctMode === 0 ? "전일 대비" : "최근 1개월"} ⇄<br>평균 ${pct(avg)} · 상승 ${ps.filter(p => p > 0).length} 하락 ${ps.filter(p => p < 0).length}${divs.length ? ` · 평균 배당 ${pct1(divs.reduce((a, b) => a + b, 0) / divs.length)}` : ""}`;
       sc = cls(avg);
     }
-    html += econBannerHtml();
+    html += econBannerHtml() + xBannerHtml();
     html += `<div class="between" style="margin:8px 2px"><div class="small b ${sc}" id="sumLine" style="line-height:1.45">${sum}</div><button class="chip sm" id="sortBtn">${SORT_NAMES[H.sort]} ⇅</button></div>`;
     if (H.tab === -2 && !items.length) html += `<div class="sub" style="text-align:center;padding:50px 16px;font-size:14px">관심 종목이 아직 없어요.<br><br>종목을 길게 누르거나, 상세 화면의 ☆를 눌러 추가하세요.</div>`;
     const kr = items.filter(([st]) => isKr(st.t)), us = items.filter(([st]) => !isKr(st.t));
@@ -1246,6 +1246,7 @@ const STUDY = t => ({
   signals: ["🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals"],
   screener: ["🟢", "매수 신호 많은 종목", "go:screener"],
   econ: ["📅", "경제 캘린더 (CPI·고용·금리 발표)", "go:econ"],
+  x: ["🧙", "미너비니 X 글 (지금 위험한가?)", "go:x"],
   crowd: ["🐜", "서학개미·상위 1% 고수 픽", "go:crowd"],
   news: ["📰", "뉴스·기업분석 모아보기", "go:news"],
   sp500: ["🇺🇸", "S&P 500 · 편입/퇴출", "go:sp500"],
@@ -1323,6 +1324,7 @@ async function render(force) {
     case "sectors": return renderSectors();
     case "screener": return renderScreener();
     case "econ": return renderEcon();
+    case "x": return renderX();
   }
   go("");
 }
@@ -1402,6 +1404,17 @@ async function loadEconSoon() {
   const now = Date.now(); ECON_SOON = d.up.filter(e => e.imp === "High" && e.at > now - 3600_000 && e.at < now + 86400_000);
   if (ECON_SOON.length && route().name === "home" && H.tab !== -3) renderHome(true);
 }
+let X_NEW = [];
+async function loadXNew() {
+  const d = await data("x.json", 300_000); if (!d) return;
+  const seen = LS.get("xSeen", 0); X_NEW = (d.posts || []).filter(p => p.at > seen && p.at > Date.now() - 3 * 86400_000);
+  if (!seen && d.posts?.length) LS.set("xSeen", d.posts[0].at);   // 처음엔 지난 글로 알리지 않음
+  if (X_NEW.length && route().name === "home") renderHome(true);
+}
+function xBannerHtml() {
+  if (!X_NEW.length) return ""; const p = X_NEW[0];
+  return `<a class="card" href="#/x" onclick="LS.set('xSeen', ${p.at}); X_NEW = []" style="display:block;text-decoration:none;margin-top:8px;padding:10px 14px;border-left:4px solid ${XV[p.v][1]}"><div class="small b">🧙 미너비니 새 글 ${X_NEW.length}개 · ${XV[p.v][0]}</div><div class="small" style="margin-top:3px;color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(p.ko || p.text)}</div></a>`;
+}
 function econBannerHtml() {
   const now = Date.now(), l = ECON_SOON.filter(e => e.at > now - 3600_000); if (!l.length) return "";
   const t = ms => new Date(ms).toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false });
@@ -1411,6 +1424,26 @@ function econBannerHtml() {
 
 // ═════════════ 경제 캘린더 ═════════════
 const EC = { open: null };
+const XV = { risk: ["🔴 위험", "var(--red)"], mid: ["🟡 중립", AMB], ok: ["🟢 괜찮음", "var(--green)"] };
+async function renderX() {
+  setHeader("🧙 미너비니 X 글", true);
+  $("#app").innerHTML = `<div class="spin">불러오는 중…</div>`;
+  const d = await data("x.json", 300_000);
+  if (!d) { $("#app").innerHTML = note("아직 데이터가 없어요."); return; }
+  const ps = d.posts || [], kst = ms => new Date(ms).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+  const recent = ps.filter(p => p.at > Date.now() - 7 * 86400_000), cnt = k => recent.filter(p => p.v === k).length;
+  const now = !recent.length ? null : cnt("risk") > cnt("ok") ? "risk" : cnt("ok") > cnt("risk") ? "ok" : "mid";
+  let h = now ? `<div class="card" style="border-left:4px solid ${XV[now][1]}"><div class="sub">최근 7일 글 ${recent.length}개 기준</div><div class="b" style="font-size:20px;margin-top:2px">지금 ${XV[now][0]}</div>
+    <div class="small" style="margin-top:4px">위험 ${cnt("risk")} · 중립 ${cnt("mid")} · 괜찮음 ${cnt("ok")}</div></div>` : "";
+  h += note(d.hasKey ? `X 공식 API로 새 글만 받아요 (새 글 없으면 0원). 이번 달 ${(d.usage?.[new Date().toISOString().slice(0, 7)]?.reads) || 0}/${d.cap}개 읽음${d.capped ? " · 상한 도달, 다음 달까지 멈춤" : ""}` : "X API 키가 아직 없어요. 지금 보이는 글은 직접 정리해 둔 거예요.");
+  for (const p of ps) h += `<div class="card" style="padding:12px 14px"><div class="between"><span class="badge" style="background:${XV[p.v][1]};font-size:11px;padding:2px 7px">${XV[p.v][0]}</span><span class="sub">${kst(p.at)}</span></div>
+    <div style="margin-top:6px;line-height:1.55;font-size:14px">${esc(p.ko || p.text)}</div>
+    ${p.text && p.ko ? `<details style="margin-top:6px"><summary class="sub">원문 보기</summary><div class="small muted" style="margin-top:4px;white-space:pre-wrap">${esc(p.text)}</div></details>` : ""}
+    <a class="small ac" href="${p.url}" target="_blank" rel="noopener">X에서 보기 ↗</a></div>`;
+  h += note("위험·중립·괜찮음은 글에 나온 단어(숏·조정·하락 / 돌파·매수·강세 등)로 자동 판정한 거라 참고용이에요. 투자 권유가 아니에요.");
+  $("#app").innerHTML = h;
+  if (ps[0]) { LS.set("xSeen", ps[0].at); X_NEW = []; }
+}
 async function renderEcon() {
   setHeader("📅 경제 캘린더", true);
   $("#app").innerHTML = `<div class="spin">불러오는 중…</div>`;
@@ -1494,6 +1527,6 @@ async function applyIpos() {
   await Promise.all([loadCatalog(), loadStatic()]);
   if (!location.hash) { const last = LS.get("lastHash", ""); if (last && last !== "#/") { location.hash = last; return; } }
   render();
-  applyIpos().then(applyFill); loadEconSoon();
+  applyIpos().then(applyFill); loadEconSoon(); loadXNew();
 })();
 document.addEventListener("visibilitychange", () => { if (!document.hidden && route().name === "home") refreshQuotes(false); });

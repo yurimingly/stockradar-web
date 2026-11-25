@@ -992,6 +992,73 @@ def disc_quote(q):
     return {"sym": q.get("symbol"), "name": q.get("longName") or q.get("shortName") or q.get("symbol"), "price": q.get("regularMarketPrice") or 0,
             "pct": q.get("regularMarketChangePercent") or 0, "cap": q.get("marketCap") or 0, "pe": q.get("trailingPE")}
 
+# ───────── 미너비니 X 글 (X 공식 API, 유료: 글 1개 읽을 때 $0.005) ─────────
+# 돈을 아끼려고: ① 받은 글은 history/x/ 에 영구 저장(main 브랜치 커밋) → 같은 글을 다시 읽지 않음
+#               ② since_id 로 '새 글만' 요청 → 새 글이 없으면 0원
+#               ③ 답글·리트윗은 X 쪽에서 빼고 보냄(과금 안 됨)  ④ 한 달 상한(X_MONTH_CAP개)을 넘으면 멈춤
+X_USER = "markminervini"
+X_DIR = "history/x"
+X_MONTH_CAP = int(os.environ.get("X_MONTH_CAP", "300"))   # 300개 = 약 $1.5
+
+RISK_WORDS = r"danger|risk|short|hedge|lower lows?|downside|correction|bear|sell|selling|caution|careful|not out of the woods|obstacle|weak|broken|stop|defensive|cash|distribution|decline|prove itself|work to do|oversold"
+GOOD_WORDS = r"breakout|breaking out|follow-through|constructive|healthy|favorable|bull|long exposure|buy|buying|strong|strength|leadership|setups?|traction|bottom(ed)?|uptrend|confirmation|green light"
+
+def x_verdict(text):
+    t = text.lower()
+    r = len(re.findall(RISK_WORDS, t)); g = len(re.findall(GOOD_WORDS, t))
+    if r >= g + 2 or (r and not g): return "risk"
+    if g >= r + 2 or (g and not r): return "ok"
+    return "mid"
+
+def ko_translate(text):
+    """무료 구글 번역(키 없음). 실패하면 빈 문자열"""
+    try:
+        r = S.get("https://translate.googleapis.com/translate_a/single", timeout=20,
+                  params={"client": "gtx", "sl": "en", "tl": "ko", "dt": "t", "q": text[:4500]})
+        return "".join(x[0] for x in r.json()[0] if x and x[0])
+    except Exception: return ""
+
+def do_x():
+    os.makedirs(X_DIR, exist_ok=True)
+    fp = os.path.join(X_DIR, X_USER + ".json")
+    st = load(fp, None) or {"user": X_USER, "id": "", "posts": [], "usage": {}}
+    tok = os.environ.get("X_BEARER_TOKEN", "").strip()
+    month = time.strftime("%Y-%m", time.gmtime(NOW))
+    use = st.setdefault("usage", {}).setdefault(month, {"reads": 0, "calls": 0})
+    st["capped"] = use["reads"] >= X_MONTH_CAP
+    if tok and not st["capped"]:
+        h = {"Authorization": "Bearer " + tok}
+        try:
+            if not st.get("id"):   # 계정 번호는 한 번만 조회($0.01)해서 저장
+                r = S.get(f"https://api.x.com/2/users/by/username/{X_USER}", headers=h, timeout=20)
+                print("x user", r.status_code); st["id"] = (r.json().get("data") or {}).get("id", "")
+                use["calls"] += 1
+            if st.get("id"):
+                ids = [x["id"] for x in st["posts"] if x.get("id", "").isdigit()]
+                params = {"exclude": "replies,retweets", "tweet.fields": "created_at,note_tweet,referenced_tweets",
+                          "max_results": str(min(100, max(5, X_MONTH_CAP - use["reads"])))}
+                if ids: params["since_id"] = max(ids, key=int)
+                else: params["max_results"] = "10"     # 처음엔 최근 10개만
+                r = S.get(f"https://api.x.com/2/users/{st['id']}/tweets", headers=h, params=params, timeout=20)
+                use["calls"] += 1
+                print("x tweets", r.status_code, r.text[:200] if r.status_code != 200 else "")
+                data = (r.json().get("data") or []) if r.status_code == 200 else []
+                use["reads"] += len(data)
+                have = set(ids)
+                for tw in reversed(data):
+                    if tw["id"] in have: continue
+                    text = (tw.get("note_tweet") or {}).get("text") or tw.get("text", "")
+                    text = re.sub(r"\s*https://t\.co/\w+$", "", text).strip()
+                    ms = (int(tw["id"]) >> 22) + 1288834974657   # 글 번호에 작성 시각이 들어 있음
+                    st["posts"].insert(0, {"id": tw["id"], "at": ms, "text": text, "ko": ko_translate(text), "v": x_verdict(text),
+                                           "url": f"https://x.com/{X_USER}/status/{tw['id']}"})
+                st["capped"] = use["reads"] >= X_MONTH_CAP
+        except Exception as e: print("x fail", e)
+    st["posts"].sort(key=lambda x: -x["at"])
+    st["at"] = int(NOW * 1000); st["hasKey"] = bool(tok); st["cap"] = X_MONTH_CAP
+    save(fp, st)
+    save(path("x.json"), {k: v for k, v in st.items()})
+
 def main():
     cat = load("web/catalog.json", [])
     static = load("web/static.json", {})
@@ -1120,6 +1187,8 @@ def main():
     except Exception as e: print('signals fail', e)
     try: do_econ()
     except Exception as e: print('econ fail', e)
+    try: do_x()
+    except Exception as e: print('x fail', e)
 
     meta["updatedAt"] = int(NOW * 1000)
     save(path("meta.json"), meta)
