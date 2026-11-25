@@ -1003,6 +1003,12 @@ X_MONTH_CAP = int(os.environ.get("X_MONTH_CAP", "300"))   # 300개 = 약 $1.5
 RISK_WORDS = r"danger|risk|short|hedge|lower lows?|downside|correction|bear|sell|selling|caution|careful|not out of the woods|obstacle|weak|broken|stop|defensive|cash|distribution|decline|prove itself|work to do|oversold"
 GOOD_WORDS = r"breakout|breaking out|follow-through|constructive|healthy|favorable|bull|long exposure|buy|buying|strong|strength|leadership|setups?|traction|bottom(ed)?|uptrend|confirmation|green light"
 
+# 홍보 글(강의·도구·가입 권유): X에서 받을 때부터 빼고(돈 안 나감), 혹시 섞여 오면 화면·판정에서 숨김
+X_PROMO_PHRASES = ["access my tools", "contact us", "learn more", "concierge", "sign up", "workshop", "most powerful tool",
+                   "free trial", "enroll", "register now", "real-time guidance", "take your trading to", "join us", "promo code"]
+X_PROMO = re.compile("|".join(re.escape(x) for x in X_PROMO_PHRASES) + r"|minervini\.com|mpa ?training|master trader program", re.I)
+def x_is_promo(text): return bool(X_PROMO.search(text or ""))
+
 def x_verdict(text):
     t = text.lower()
     r = len(re.findall(RISK_WORDS, t)); g = len(re.findall(GOOD_WORDS, t))
@@ -1073,12 +1079,22 @@ def do_x():
                 use["calls"] += 1
             if st.get("id"):
                 ids = [x["id"] for x in st["posts"] if x.get("id", "").isdigit()]
-                params = {"exclude": "replies,retweets", "tweet.fields": "created_at,note_tweet,referenced_tweets",
-                          "max_results": str(min(100, max(5, X_MONTH_CAP - use["reads"])))}
-                if ids: params["since_id"] = max(ids, key=int)
-                else: params["max_results"] = "10"     # 처음엔 최근 10개만
-                r = S.get(f"https://api.x.com/2/users/{st['id']}/tweets", headers=h, params=params, timeout=20)
+                since = max(ids, key=int) if ids else None
+                left = max(10, X_MONTH_CAP - use["reads"])
+                # ① 검색으로 받기: 홍보 문구가 든 글은 X가 아예 안 보냄 → 그만큼 요금도 안 나감
+                q = f"from:{X_USER} -is:retweet -is:reply " + " ".join(f'-"{x}"' if " " in x else f"-{x}" for x in X_PROMO_PHRASES)
+                params = {"query": q, "tweet.fields": "created_at,note_tweet", "max_results": str(min(100, left))}
+                if since: params["since_id"] = since
+                else: params["max_results"] = "10"
+                r = S.get("https://api.x.com/2/tweets/search/recent", headers=h, params=params, timeout=20)
                 use["calls"] += 1
+                if r.status_code != 200:   # 검색이 안 되면(예: 마지막 글이 7일보다 오래됨) 예전 방식으로
+                    print("x search", r.status_code, r.text[:200])
+                    params = {"exclude": "replies,retweets", "tweet.fields": "created_at,note_tweet", "max_results": str(min(100, max(5, left)))}
+                    if since: params["since_id"] = since
+                    else: params["max_results"] = "10"
+                    r = S.get(f"https://api.x.com/2/users/{st['id']}/tweets", headers=h, params=params, timeout=20)
+                    use["calls"] += 1
                 print("x tweets", r.status_code, r.text[:200] if r.status_code != 200 else "")
                 data = (r.json().get("data") or []) if r.status_code == 200 else []
                 use["reads"] += len(data)
@@ -1093,7 +1109,8 @@ def do_x():
                 st["capped"] = use["reads"] >= X_MONTH_CAP
         except Exception as e: print("x fail", e)
     st["posts"].sort(key=lambda x: -x["at"])
-    for p in st["posts"]: p["tags"] = x_tags(p)   # 저장된 글로 다시 계산 (X는 다시 안 부름)
+    for p in st["posts"]:   # 저장된 글로 다시 계산 (X는 다시 안 부름)
+        p["tags"] = x_tags(p); p["promo"] = x_is_promo(p.get("text"))
     st["at"] = int(NOW * 1000); st["hasKey"] = bool(tok); st["cap"] = X_MONTH_CAP
     save(fp, st)
     save(path("x.json"), {k: v for k, v in st.items()})

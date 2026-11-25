@@ -1407,7 +1407,7 @@ async function loadEconSoon() {
 let X_NEW = [];
 async function loadXNew() {
   const d = await data("x.json", 300_000); if (!d) return;
-  const seen = LS.get("xSeen", 0); X_NEW = (d.posts || []).filter(p => p.at > seen && p.at > Date.now() - 3 * 86400_000);
+  const seen = LS.get("xSeen", 0); X_NEW = (d.posts || []).filter(p => !p.promo && p.at > seen && p.at > Date.now() - 3 * 86400_000);
   if (!seen && d.posts?.length) LS.set("xSeen", d.posts[0].at);   // 처음엔 지난 글로 알리지 않음
   if (X_NEW.length && route().name === "home") renderHome(true);
 }
@@ -1441,7 +1441,7 @@ async function renderX() {
   $("#app").innerHTML = `<div class="spin">불러오는 중…</div>`;
   const d = await data("x.json", 300_000);
   if (!d) { $("#app").innerHTML = note("아직 데이터가 없어요."); return; }
-  const ps = d.posts || [], kst = ms => new Date(ms).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+  const all = d.posts || [], ps = all.filter(p => !p.promo), kst = ms => new Date(ms).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
   const recent = ps.filter(p => p.at > Date.now() - 7 * 86400_000), cnt = k => recent.filter(p => p.v === k).length;
   const now = !recent.length ? null : cnt("risk") > cnt("ok") ? "risk" : cnt("ok") > cnt("risk") ? "ok" : "mid";
   let h = now ? `<div class="card" style="border-left:4px solid ${XV[now][1]}"><div class="sub">최근 7일 글 ${recent.length}개 기준</div><div class="b" style="font-size:20px;margin-top:2px">지금 ${XV[now][0]}</div>
@@ -1452,6 +1452,7 @@ async function renderX() {
     ${p.text && p.ko ? `<details style="margin-top:6px"><summary class="sub">원문 보기</summary><div class="small muted" style="margin-top:4px;white-space:pre-wrap">${esc(p.text)}</div></details>` : ""}
     ${(p.tags || []).length ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">${p.tags.map(xTagChip).join("")}</div>` : ""}
     <a class="small ac" style="display:inline-block;margin-top:8px" href="${p.url}" target="_blank" rel="noopener">X에서 보기 ↗</a></div>`;
+  if (all.length > ps.length) h += note(`강의·도구 홍보 글 ${all.length - ps.length}개는 숨겼어요.`);
   h += note("위험·중립·괜찮음은 글에 나온 단어(숏·조정·하락 / 돌파·매수·강세 등)로 자동 판정한 거라 참고용이에요. 투자 권유가 아니에요.");
   h = h.replace(/<div class="spin">.*?<\/div>/, "");
   $("#app").innerHTML = h;
