@@ -783,7 +783,7 @@ def nq_day(date, cache):
 
 def do_econ():
     old = load(path("econ.json"), {}) or {}
-    full = stale("econ", 3 * 3600) or not old.get("ind") or old.get("v") != 3   # 일정은 매번(20분), FRED 기록은 3시간마다
+    full = stale("econ", 3 * 3600) or not old.get("ind") or old.get("v") != 4   # 일정은 매번(20분), FRED 기록은 3시간마다
     up = []
     for wk in ("thisweek", "nextweek"):
         for e in ff_week(wk):
@@ -874,7 +874,7 @@ def do_econ():
                 print("econ", sid, len(hist), "next", future[:1], hist[:2])
             except Exception as e: print("econ fail", sid, e)
         save(path("nqcal.json"), nqc)
-    save(path("econ.json"), {"at": int(NOW * 1000), "v": 3, "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
+    save(path("econ.json"), {"at": int(NOW * 1000), "v": 4, "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
 
 # ───────── 신규 상장 (IPO) ─────────
 # 큰 신규 상장은 앱·웹앱이 알맞은 섹터에 자동으로 넣어 줌 (사용자가 지우면 다시 안 넣음)
