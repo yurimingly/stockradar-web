@@ -740,22 +740,34 @@ def ff_week(which):
     try: return r.json() if r and r.status_code == 200 else []
     except Exception: return []
 
-def debug_investing():
-    hdr = {"User-Agent": UA, "Accept": "application/json, text/plain, */*", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
-    for d in ["2026-11-10", "2026-11-06", "2022-06-10", "2019-03-12"]:
-        r = get(f"https://api.nasdaq.com/api/calendar/economicevents?date={d}", headers=hdr)
-        try:
-            rows = r.json()["data"]["rows"]
-            print("NQ", d, len(rows), [x for x in rows if x.get("country") in ("United States", "US", "USA")][:4] or rows[:2])
-        except Exception as e: print("NQ", d, r.status_code if r is not None else None, (r.text[:200] if r is not None else ""), e)
-    for w in ["lastweek", "thisweek"]:
-        r = get(f"https://nfs.faireconomy.media/ff_calendar_{w}.json")
-        print("FF", w, r.status_code if r is not None else None, (r.text[:300] if r is not None else ""))
+NQ_HDR = {"User-Agent": UA, "Accept": "application/json, text/plain, */*", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
+# 지표별 Nasdaq 경제 캘린더 이름 (예상치·첫 발표 실제치를 여기서 가져옴)
+NQ_NAMES = {"CPIAUCSL": ["CPI (YoY)"], "CPILFESL": ["Core CPI (YoY)"], "PAYEMS": ["Nonfarm Payrolls"], "UNRATE": ["Unemployment Rate"],
+            "PPIFIS": ["PPI (YoY)"], "PCEPILFE": ["Core PCE Price Index (YoY)"], "A191RL1Q225SBEA": ["GDP (QoQ)"], "RSAFS": ["Retail Sales (MoM)"],
+            "ICSA": ["Initial Jobless Claims"]}
+def nq_num(x):
+    x = (x or "").replace("&nbsp;", "").replace(",", "").strip()
+    m = re.fullmatch(r"(-?\d+(?:\.\d+)?)\s*([KMB%]?)", x)
+    if not m: return None
+    v = float(m.group(1))
+    return v * {"K": 1e3, "M": 1e6, "B": 1e9}.get(m.group(2), 1)
+def nq_day(date, cache):
+    """그날 미국 경제지표 발표 (이름 → (실제, 예상)). 지난 날짜는 바뀌지 않으니 한 번 받으면 저장"""
+    if date in cache: return cache[date]
+    r = get(f"https://api.nasdaq.com/api/calendar/economicevents?date={date}", headers=NQ_HDR)
+    try: rows = r.json()["data"]["rows"] or []
+    except Exception: return {}
+    out = {}
+    for x in rows:
+        if x.get("country") != "United States": continue
+        a, c = nq_num(x.get("actual")), nq_num(x.get("consensus"))
+        if a is not None or c is not None: out[x["eventName"].strip()] = [a, c]
+    if date < time.strftime("%Y-%m-%d", time.gmtime(NOW - 86400)): cache[date] = out
+    return out
 
 def do_econ():
-    debug_investing()
     old = load(path("econ.json"), {}) or {}
-    if not stale("econ", 3 * 3600) and old.get("ind") and old.get("v") == 2: return
+    if not stale("econ", 3 * 3600) and old.get("ind") and old.get("v") == 3: return
     up = []
     for wk in ("thisweek", "nextweek"):
         for e in ff_week(wk):
@@ -771,6 +783,7 @@ def do_econ():
         sp, nq = day_moves("^GSPC"), day_moves("^IXIC")
         start = time.strftime("%Y-%m-%d", time.gmtime(NOW - 8 * 365 * 86400))
         rel_cache = {}
+        nqc = load(path("nqcal.json"), {}) or {}
         for rid, sid, name, how, unit, desc in ECON:
             try:
                 if rid not in rel_cache:
@@ -807,15 +820,31 @@ def do_econ():
                     rd = next((d for d in past if d > pe), None)
                     if not rd: continue
                     hist.append({"d": rd, "obs": od, "v": round(v, 3), "pv": round(pv, 3), "sp": round(sp[rd], 2) if rd in sp else None, "nq": round(nq[rd], 2) if rd in nq else None})
+                # 예상치(컨센서스)와 첫 발표 실제치 붙이기 — 최근 8년(주간 지표는 2년)
+                names = NQ_NAMES.get(sid, [])
+                todo = [h for h in hist if h["d"] >= time.strftime("%Y-%m-%d", time.gmtime(NOW - (2 if sid == "ICSA" else 8) * 365 * 86400))]
+                with ThreadPoolExecutor(6) as ex: days = list(ex.map(lambda h: nq_day(h["d"], nqc), todo))
+                hit = 0
+                for h, day in zip(todo, days):
+                    ev = next((day[n] for n in names if n in day), None)
+                    if not ev: continue
+                    a, c = ev
+                    scale = 1e-3 if sid == "PAYEMS" else 1          # 고용은 천 명 단위로
+                    if a is not None: h["a"] = round(a * scale, 3)
+                    if c is not None: h["fc"] = round(c * scale, 3); hit += 1
+                print("  consensus", sid, hit, "/", len(todo))
                 def stat(rows):
                     m = [x["sp"] for x in rows if x["sp"] is not None]
                     return {"n": len(m), "avg": round(sum(m) / len(m), 2) if m else None, "win": round(sum(1 for x in m if x > 0) / len(m) * 100) if m else None}
+                act = lambda x: x.get("a", x["v"])
+                withfc = [x for x in hist if x.get("fc") is not None]
                 ind.append({"id": sid, "name": name, "unit": unit, "desc": desc, "how": how, "next": future[0] if future else None,
-                            "hist": hist[:120], "up": stat([x for x in hist if x["v"] > x["pv"]]), "down": stat([x for x in hist if x["v"] < x["pv"]]),
-                            "all": stat(hist)})
+                            "hist": hist[:120], "up": stat([x for x in withfc if act(x) > x["fc"]]), "down": stat([x for x in withfc if act(x) < x["fc"]]),
+                            "same": stat([x for x in withfc if act(x) == x["fc"]]), "all": stat(hist)})
                 print("econ", sid, len(hist), "next", future[:1], hist[:2])
             except Exception as e: print("econ fail", sid, e)
-    save(path("econ.json"), {"at": int(NOW * 1000), "v": 2, "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
+        save(path("nqcal.json"), nqc)
+    save(path("econ.json"), {"at": int(NOW * 1000), "v": 3, "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
 
 # ───────── 신규 상장 (IPO) ─────────
 # 큰 신규 상장은 앱·웹앱이 알맞은 섹터에 자동으로 넣어 줌 (사용자가 지우면 다시 안 넣음)
