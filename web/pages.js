@@ -680,10 +680,11 @@ function chipMenu(sec) {
     opts.map((o, k) => `<div class="hit" data-cm="${k}">${o}</div>`).join(""), el => el.querySelectorAll("[data-cm]").forEach(d => d.onclick = () => {
       closeSheet();
       const k = +d.dataset.cm;
-      if (k === 0) renameSector(S.sectors.indexOf(sec), () => renderHome(true));
-      else if (k === 1) { const e = prompt("이모지 하나", sec.emoji); if (e?.trim()) { sec.emoji = e.trim(); S.save(); renderHome(true); } }
-      else if (k === 2) deleteSector(S.sectors.indexOf(sec), () => renderHome(true));
-      else addSector(() => renderHome(true));
+      const done = () => { if (route().name === "home") renderHome(true); if (!$("#drawer").classList.contains("hidden")) drawer(true); };
+      if (k === 0) renameSector(S.sectors.indexOf(sec), done);
+      else if (k === 1) { const e = prompt("이모지 하나", sec.emoji); if (e?.trim()) { sec.emoji = e.trim(); S.save(); done(); } }
+      else if (k === 2) deleteSector(S.sectors.indexOf(sec), done);
+      else addSector(done);
     }));
 }
 
@@ -1200,6 +1201,40 @@ function resetAll() {
 }
 
 // ═════════════ 메뉴 · 화면 이동 ═════════════
+// 메뉴의 섹터 줄 꾹 누르기: 그대로 떼면 메뉴(이름·이모지·삭제), 누른 채 위아래로 끌면 순서 바꾸기
+const DR_DRAG = { justDragged: false };
+function drawerDrag(row) {
+  const box = $("#drSecs");
+  let timer, dragging = false, moved = false, startY = 0, base = 0;
+  const end = () => {
+    clearTimeout(timer);
+    if (!dragging) return;
+    dragging = false; row.classList.remove("lift"); row.style.transform = "";
+    DR_DRAG.justDragged = true; setTimeout(() => DR_DRAG.justDragged = false, 350);
+    const sec = S.sectors[+row.dataset.si];
+    if (!moved) { chipMenu(sec); return; }
+    const cur = H.tab >= 0 ? S.sectors[H.tab] : null;
+    const order = [...box.querySelectorAll(".drsec")].map(r => S.sectors[+r.dataset.si]);
+    if (order.length === S.sectors.length) { S.sectors = order; if (cur) H.tab = S.sectors.indexOf(cur); S.save(); saveH(); }
+    drawer(true); if (route().name === "home") renderHome(true);
+  };
+  row.addEventListener("touchstart", e => {
+    startY = base = e.touches[0].clientY; moved = false;
+    timer = setTimeout(() => { dragging = true; navigator.vibrate?.(20); row.classList.add("lift"); }, 420);
+  }, { passive: true });
+  row.addEventListener("touchmove", e => {
+    const y = e.touches[0].clientY;
+    if (!dragging) { if (Math.abs(y - startY) > 10) clearTimeout(timer); return; }
+    e.preventDefault();
+    if (Math.abs(y - startY) > 12) moved = true;
+    row.style.transform = `translateY(${y - base}px)`;
+    const r = row.getBoundingClientRect(), cy = r.top + r.height / 2, next = row.nextElementSibling, prev = row.previousElementSibling;
+    if (next) { const n = next.getBoundingClientRect(); if (cy > n.top + n.height / 2) { box.insertBefore(next, row); base += n.height; row.style.transform = `translateY(${y - base}px)`; } }
+    if (prev) { const p = prev.getBoundingClientRect(); if (cy < p.top + p.height / 2) { box.insertBefore(row, prev); base -= p.height; row.style.transform = `translateY(${y - base}px)`; } }
+  }, { passive: false });
+  row.addEventListener("touchend", end); row.addEventListener("touchcancel", end);
+  row.addEventListener("contextmenu", e => { e.preventDefault(); if (!("ontouchstart" in window)) chipMenu(S.sectors[+row.dataset.si]); });
+}
 function drawer(open) {
   $("#drawer").classList.toggle("hidden", !open); $("#drawerBg").classList.toggle("hidden", !open);
   if (!open) return;
@@ -1208,7 +1243,8 @@ function drawer(open) {
   const t = H.tab;
   $("#drawer").innerHTML = `<div class="b" style="font-size:22px;padding:0 12px">StockRadar</div><div class="sub" style="padding:2px 12px 6px">${Q._at ? "시세 " + ago(Q._at) + " 기준" : ""}</div>
     <div class="grp">보기</div>${item("★", "관심 종목", "tab:-2", home && t === -2, S.favs.size)}${item("🧠", "대가별 종목 순위", "tab:-3", home && t === -3, STATIC.gurus.length + "명")}${item("📋", "전체 종목", "tab:-1", home && t === -1)}
-    ${S.sectors.map((s, i) => item(s.emoji, s.name, "tab:" + i, home && t === i, s.stocks.length)).join("")}<div class="divider"></div>
+    <div id="drSecs">${S.sectors.map((s, i) => item(s.emoji, s.name, "tab:" + i, home && t === i, s.stocks.length).replace('<a class="item row"', `<a class="item row drsec" data-si="${i}"`)).join("")}</div>
+    <div class="sub" style="padding:2px 12px 6px">섹터를 꾹 누르면 이름 바꾸기·삭제, 꾹 누른 채 위아래로 끌면 순서 바꾸기</div><div class="divider"></div>
     <div class="grp">공부하기</div>${item("⚖️", "종목 비교 (PER·PBR·성장률…)", "go:compare/" + (t >= 0 ? t : -2) + "/0")}${item("🔭", "종목 발굴 (화제·스크리너·전문가)", "go:discover")}
     ${item("🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals")}${item("🟢", "매수 신호 많은 종목", "go:screener")}${item("📅", "경제 캘린더 (CPI·고용·금리 발표)", "go:econ")}${item("🐜", "서학개미·상위 1% 고수 픽", "go:crowd")}${item("📰", "뉴스·기업분석 모아보기", "go:news")}
     ${item("🇺🇸", "S&P 500 · 편입/퇴출", "go:sp500")}${item("📖", "지표 사전 (PER·PBR·EPS…)", "go:glossary")}${item("📚", "대가들의 투자법·책", "go:gurus")}<div class="divider"></div>
@@ -1217,7 +1253,9 @@ function drawer(open) {
     ${item("↺", "기본 유망주 목록으로 초기화", "reset")}<div class="divider"></div>
     <div class="grp">설정</div>${item("🔑", "AI 뉴스 요약 설정", "go:settings", false, LS.get("gemFree", "") ? "사용 중" : "키 없음")}${item("⟳", "지금 시세 새로고침", "refresh")}
     <div class="sub" style="padding:14px 12px 0">시세·지표: Yahoo Finance · 뉴스: Google 뉴스·Yahoo<br>투자 권유가 아닌 정보 모음이에요.</div>`;
+  $("#drawer").querySelectorAll(".drsec").forEach(drawerDrag);
   $("#drawer").querySelectorAll("[data-act]").forEach(a => a.onclick = () => {
+    if (DR_DRAG.justDragged) return;
     drawer(false); const [k, v] = a.dataset.act.split(/:(.*)/);
     if (k === "tab") { H.tab = +v; saveH(); route().name === "home" ? renderHome(true) : go(""); window.scrollTo(0, 0); }
     else if (k === "go") go(v);

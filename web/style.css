@@ -115,3 +115,5 @@ table.cmp .stick .sub { max-width: 100px; }
 .fold { cursor: pointer; }
 .chip.lift { position: relative; z-index: 5; box-shadow: 0 6px 16px rgba(0,0,0,.5); transition: none; }
 #tabChips .chip { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.drsec { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.drsec.lift { position: relative; z-index: 5; background: var(--card2) !important; box-shadow: 0 6px 16px rgba(0,0,0,.5); }
