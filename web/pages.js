@@ -1158,7 +1158,7 @@ function drawer(open) {
     <div class="grp">보기</div>${item("★", "관심 종목", "tab:-2", home && t === -2, S.favs.size)}${item("🧠", "대가별 종목 순위", "tab:-3", home && t === -3, STATIC.gurus.length + "명")}${item("📋", "전체 종목", "tab:-1", home && t === -1)}
     ${S.sectors.map((s, i) => item(s.emoji, s.name, "tab:" + i, home && t === i, s.stocks.length)).join("")}<div class="divider"></div>
     <div class="grp">공부하기</div>${item("⚖️", "종목 비교 (PER·PBR·성장률…)", "go:compare/" + (t >= 0 ? t : -2) + "/0")}${item("🔭", "종목 발굴 (화제·스크리너·전문가)", "go:discover")}
-    ${item("🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals")}${item("🟢", "매수 신호 많은 종목", "go:screener")}${item("🐜", "서학개미·상위 1% 고수 픽", "go:crowd")}${item("📰", "뉴스·기업분석 모아보기", "go:news")}
+    ${item("🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals")}${item("🟢", "매수 신호 많은 종목", "go:screener")}${item("📅", "경제 캘린더 (CPI·고용·금리 발표)", "go:econ")}${item("🐜", "서학개미·상위 1% 고수 픽", "go:crowd")}${item("📰", "뉴스·기업분석 모아보기", "go:news")}
     ${item("🇺🇸", "S&P 500 · 편입/퇴출", "go:sp500")}${item("📖", "지표 사전 (PER·PBR·EPS…)", "go:glossary")}${item("📚", "대가들의 투자법·책", "go:gurus")}<div class="divider"></div>
     <div class="grp">관리</div>${item("＋", "종목 추가 (섹터 자동 분류)", "addstock")}${item("＋", "섹터 추가", "addsec")}
     ${t >= 0 && S.sectors[t] ? item("✏️", `'${S.sectors[t].name}' 이름 바꾸기`, "rensec") + item("🗑", `'${S.sectors[t].name}' 삭제`, "delsec") : ""}
@@ -1198,6 +1198,7 @@ async function render(force) {
     case "gurus": return renderGuruIntro(a);
     case "sectors": return renderSectors();
     case "screener": return renderScreener();
+    case "econ": return renderEcon();
   }
   go("");
 }
@@ -1268,6 +1269,44 @@ async function renderSigHistory(viewChips) {
     `<div class="card row" style="padding:10px 14px;margin-bottom:5px" data-open="${esc(x.sym)}" data-name="${esc(x.n)}"><div class="grow" style="min-width:0"><b>${esc(x.sym)}</b> <span class="small g">🟢${x.g}</span><div class="sub ell">${esc(x.n)} · ${money(x.p, x.sym)} → ${money(x.now, x.sym)}</div></div><b class="${cls(x.r)}" style="font-size:15px">${pct(x.r)}</b></div>`).join("");
   h += note("매주 한 번 자동 저장돼요. 기록은 계속 쌓이고 지워지지 않아요. 투자 판단의 참고용이에요.");
   $("#shBody").innerHTML = h;
+}
+
+// ═════════════ 경제 캘린더 ═════════════
+const EC = { open: null };
+async function renderEcon() {
+  setHeader("📅 경제 캘린더", true);
+  $("#app").innerHTML = `<div class="spin">불러오는 중…</div>`;
+  const d = await data("econ.json", 600_000);
+  if (!d) { $("#app").innerHTML = note("아직 데이터가 없어요. GitHub이 3시간마다 모아요."); return; }
+  const kst = ms => new Date(ms).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+  const dayKey = ms => new Date(ms).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul", month: "long", day: "numeric", weekday: "short" });
+  let h = `<div class="sec">🗓 이번 주·다음 주 미국 주요 발표 (한국시간)</div>`;
+  const up = (d.up || []).filter(e => e.at > Date.now() - 86400_000 * 2);
+  if (!up.length) h += note("예정된 주요 발표가 없어요.");
+  let last = "";
+  for (const e of up) {
+    const k = dayKey(e.at); if (k !== last) { last = k; h += `<div class="sub b" style="margin:10px 4px 4px">${k}</div>`; }
+    const past = e.at < Date.now();
+    h += `<div class="card" style="padding:10px 14px;margin-bottom:5px;${past ? "opacity:.6" : ""}"><div class="between"><span><span class="badge" style="background:${e.imp === "High" ? "var(--red)" : AMB};font-size:10.5px;padding:2px 6px">${e.imp === "High" ? "중요" : "보통"}</span> <b style="font-size:14px">${esc(e.ko)}</b></span>
+      <span class="sub">${new Date(e.at).toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false })}</span></div>
+      <div class="small" style="margin-top:4px">${[e.act ? `<b class="ac">실제 ${esc(e.act)}</b>` : "", e.fc ? `예상 <b>${esc(e.fc)}</b>` : "", e.pv ? `이전 ${esc(e.pv)}` : ""].filter(Boolean).join(" · ") || '<span class="muted">수치 없음 (연설·회의 등)</span>'}</div></div>`;
+  }
+  h += note("예상치는 전문가 평균(컨센서스)이에요. 주가는 수치 자체보다 '예상과 얼마나 다르게 나왔나'에 크게 반응해요. 출처: Forex Factory 경제 캘린더");
+  h += `<div class="sec">📊 주요 지표 · 발표일에 주가는 어떻게 움직였나</div>` + note("탭하면 과거 발표마다 수치와 그날 S&P 500·나스닥 움직임이 나와요. 수치는 FRED(세인트루이스 연준) 기준 최근 약 8년치예요.");
+  const fv = (x, v) => x.unit === "천 명" ? (v >= 0 ? "+" : "") + f0(v) + "천" : x.unit === "건" ? f0(v / 1000) + "천 건" : f2(v) + "%";
+  for (const x of d.ind || []) {
+    const L = x.hist[0], open = EC.open === x.id;
+    const st = (lab, s) => s?.n ? `<div class="between small" style="padding:3px 0"><span>${lab} <span class="muted">(${s.n}번)</span></span><span>S&P 평균 <b class="${cls(s.avg)}">${pct(s.avg)}</b> · 오른 날 ${s.win}%</span></div>` : "";
+    h += `<div class="card" data-econ="${x.id}"><div class="between"><b style="font-size:15px">${esc(x.name)}</b><span class="sub">다음 ${x.next ? x.next.slice(5).replace("-", "/") : "—"}</span></div>
+      ${L ? `<div class="small" style="margin-top:4px">최근 <b style="font-size:16px">${fv(x, L.v)}</b> <span class="muted">(이전 ${fv(x, L.pv)} · ${L.d.slice(5).replace("-", "/")} 발표)</span> <b class="${L.v > L.pv ? "r" : L.v < L.pv ? "g" : ""}">${L.v > L.pv ? "▲" : L.v < L.pv ? "▼" : "="}</b></div>` : ""}
+      <div class="sub" style="margin-top:4px;line-height:1.4">${esc(x.desc)}</div>
+      <div style="margin-top:8px">${st("이전보다 높게 나온 날", x.up)}${st("이전보다 낮게 나온 날", x.down)}${st("전체 발표일", x.all)}</div>
+      ${open ? `<table class="mini" style="margin-top:8px"><tr><th>발표일</th><th>수치</th><th>이전</th><th>S&P</th><th>나스닥</th></tr>${x.hist.slice(0, 36).map(r => `<tr><td>${r.d.slice(2).replace(/-/g, ".")}</td><td class="b">${fv(x, r.v)}</td><td class="muted">${fv(x, r.pv)}</td><td class="${cls(r.sp)}">${r.sp == null ? "—" : pct(r.sp)}</td><td class="${cls(r.nq)}">${r.nq == null ? "—" : pct(r.nq)}</td></tr>`).join("")}</table>
+        <div class="sub" style="margin-top:6px">수치는 나중에 수정된 최종값이라 발표 당일 숫자와 조금 다를 수 있어요. S&P·나스닥은 발표일 하루 등락률이에요 (미국 시간).</div>` : `<div class="small b ac" style="margin-top:6px">과거 발표 기록 보기 ▾</div>`}</div>`;
+  }
+  h += note("같은 방향(예: 물가가 높게 나옴)이라도 그때 시장 분위기에 따라 반응이 달라요. 평균은 참고용이고 다음 발표 결과를 보장하지 않아요.");
+  $("#app").innerHTML = h;
+  $("#app").querySelectorAll("[data-econ]").forEach(c => c.onclick = () => { EC.open = EC.open === c.dataset.econ ? null : c.dataset.econ; const y = window.scrollY; renderEcon().then(() => window.scrollTo(0, y)); });
 }
 
 // ───────────── 섹터 추천 종목 자동 채우기 ─────────────
