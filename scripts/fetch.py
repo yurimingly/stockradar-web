@@ -742,7 +742,7 @@ def ff_week(which):
 
 def do_econ():
     old = load(path("econ.json"), {}) or {}
-    if not stale("econ", 3 * 3600) and old.get("ind"): return
+    if not stale("econ", 3 * 3600) and old.get("ind") and old.get("v") == 2: return
     up = []
     for wk in ("thisweek", "nextweek"):
         for e in ff_week(wk):
@@ -778,10 +778,21 @@ def do_econ():
                     elif how == "chg":
                         if i >= 1: vals.append((d, v - obs[i - 1][1]))
                     else: vals.append((d, v))
-                # 발표일 ↔ 관측치: 가장 최근 발표가 가장 최근 관측치를 낸 것으로 맞춰서 거꾸로 짝지음 (주간 지표는 발표 1번 = 관측 1개)
+                # 발표일 ↔ 관측치: 각 관측 기간이 끝난 뒤 첫 발표일이 그 수치의 첫 발표 (GDP처럼 같은 분기를 여러 번 고쳐 발표해도 첫 발표만)
+                import datetime as _dt
+                gap = (_dt.date.fromisoformat(obs[-1][0]) - _dt.date.fromisoformat(obs[-2][0])).days
+                def period_end(od):
+                    d0 = _dt.date.fromisoformat(od)
+                    if gap <= 8: return d0                                  # 주간: 관측일 = 그 주 마지막 날
+                    months = 3 if gap > 40 else 1
+                    m = d0.month - 1 + months
+                    return _dt.date(d0.year + m // 12, m % 12 + 1, 1) - _dt.timedelta(days=1)
                 hist = []
-                for k in range(1, min(len(past), len(vals) - 1) + 1):
-                    rd, (od, v), pv = past[-k], vals[-k], vals[-k - 1][1]
+                for i in range(len(vals) - 1, 0, -1):
+                    od, v = vals[i]; pv = vals[i - 1][1]
+                    pe = period_end(od).isoformat()
+                    rd = next((d for d in past if d > pe), None)
+                    if not rd: continue
                     hist.append({"d": rd, "obs": od, "v": round(v, 3), "pv": round(pv, 3), "sp": round(sp[rd], 2) if rd in sp else None, "nq": round(nq[rd], 2) if rd in nq else None})
                 def stat(rows):
                     m = [x["sp"] for x in rows if x["sp"] is not None]
@@ -789,9 +800,9 @@ def do_econ():
                 ind.append({"id": sid, "name": name, "unit": unit, "desc": desc, "how": how, "next": future[0] if future else None,
                             "hist": hist[:120], "up": stat([x for x in hist if x["v"] > x["pv"]]), "down": stat([x for x in hist if x["v"] < x["pv"]]),
                             "all": stat(hist)})
-                print("econ", sid, len(hist), "next", future[:1])
+                print("econ", sid, len(hist), "next", future[:1], hist[:2])
             except Exception as e: print("econ fail", sid, e)
-    save(path("econ.json"), {"at": int(NOW * 1000), "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
+    save(path("econ.json"), {"at": int(NOW * 1000), "v": 2, "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
 
 # ───────── 신규 상장 (IPO) ─────────
 # 큰 신규 상장은 앱·웹앱이 알맞은 섹터에 자동으로 넣어 줌 (사용자가 지우면 다시 안 넣음)
