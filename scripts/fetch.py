@@ -740,7 +740,16 @@ def ff_week(which):
     try: return r.json() if r and r.status_code == 200 else []
     except Exception: return []
 
+def debug_investing():
+    for eid in [733, 736, 56, 69, 227, 300, 238, 734, 735, 61, 905, 906, 375, 256, 294]:
+        r = get(f"https://sbcharts.investing.com/events_charts/us/{eid}.json")
+        try:
+            j = r.json(); a = j.get("attr") or []
+            print("INV", eid, r.status_code, list(j)[:5], len(a), a[-1] if a else None, j.get("data", [])[-1:] if isinstance(j.get("data"), list) else "")
+        except Exception as e: print("INV", eid, r.status_code if r else None, (r.text[:120] if r else ""), e)
+
 def do_econ():
+    debug_investing()
     old = load(path("econ.json"), {}) or {}
     if not stale("econ", 3 * 3600) and old.get("ind") and old.get("v") == 2: return
     up = []
