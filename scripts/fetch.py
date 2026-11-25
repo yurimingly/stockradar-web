@@ -720,10 +720,10 @@ FF_KO = {"CPI m/m": "소비자물가 (전월비)", "CPI y/y": "소비자물가 (
          "Trade Balance": "무역수지", "Crude Oil Inventories": "원유 재고", "Prelim GDP Price Index q/q": "GDP 물가지수", "Employment Cost Index q/q": "고용비용지수"}
 
 # Forex Factory 이름 → Nasdaq 경제 캘린더 이름 (앱이 발표 직후 실제치를 바로 받아올 때 씀)
-FF_NQ = {"CPI m/m": "CPI (MoM)", "CPI y/y": "CPI (YoY)", "Core CPI m/m": "Core CPI (MoM)", "Non-Farm Employment Change": "Nonfarm Payrolls",
-         "Unemployment Rate": "Unemployment Rate", "PPI m/m": "PPI (MoM)", "Core PPI m/m": "Core PPI (MoM)", "Core PCE Price Index m/m": "Core PCE Price Index (MoM)",
-         "Advance GDP q/q": "GDP (QoQ)", "Prelim GDP q/q": "GDP (QoQ)", "Final GDP q/q": "GDP (QoQ)", "Retail Sales m/m": "Retail Sales (MoM)",
-         "Core Retail Sales m/m": "Core Retail Sales (MoM)", "Unemployment Claims": "Initial Jobless Claims", "Federal Funds Rate": "Fed Interest Rate Decision",
+FF_NQ = {"CPI m/m": "CPI", "CPI y/y": "CPI", "Core CPI m/m": "Core CPI", "Non-Farm Employment Change": "Nonfarm Payrolls",
+         "Unemployment Rate": "Unemployment Rate", "PPI m/m": "PPI", "Core PPI m/m": "Core PPI", "Core PCE Price Index m/m": "Core PCE Price Index",
+         "Advance GDP q/q": "GDP", "Prelim GDP q/q": "GDP", "Final GDP q/q": "GDP", "Retail Sales m/m": "Retail Sales",
+         "Core Retail Sales m/m": "Core Retail Sales", "Unemployment Claims": "Initial Jobless Claims", "Federal Funds Rate": "Fed Interest Rate Decision",
          "ISM Manufacturing PMI": "ISM Manufacturing PMI", "ISM Services PMI": "ISM Non-Manufacturing PMI", "JOLTS Job Openings": "JOLTS Job Openings",
          "ADP Non-Farm Employment Change": "ADP Nonfarm Employment Change", "CB Consumer Confidence": "CB Consumer Confidence",
          "Average Hourly Earnings m/m": "Average Hourly Earnings (MoM)", "Prelim UoM Consumer Sentiment": "Michigan Consumer Sentiment",
@@ -753,9 +753,10 @@ def ff_week(which):
 
 NQ_HDR = {"User-Agent": UA, "Accept": "application/json, text/plain, */*", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
 # 지표별 Nasdaq 경제 캘린더 이름 (예상치·첫 발표 실제치를 여기서 가져옴)
-NQ_NAMES = {"CPIAUCSL": ["CPI (YoY)"], "CPILFESL": ["Core CPI (YoY)"], "PAYEMS": ["Nonfarm Payrolls"], "UNRATE": ["Unemployment Rate"],
-            "PPIFIS": ["PPI (YoY)"], "PCEPILFE": ["Core PCE Price Index (YoY)"], "A191RL1Q225SBEA": ["GDP (QoQ)"], "RSAFS": ["Retail Sales (MoM)"],
-            "ICSA": ["Initial Jobless Claims"]}
+# 같은 이름에 전월비·전년비가 같이 있어서(예: CPI 두 줄), 우리 수치와 가장 가까운 줄을 고름
+NQ_NAMES = {"CPIAUCSL": ["CPI (YoY)", "CPI"], "CPILFESL": ["Core CPI (YoY)", "Core CPI"], "PAYEMS": ["Nonfarm Payrolls"], "UNRATE": ["Unemployment Rate"],
+            "PPIFIS": ["PPI (YoY)", "PPI"], "PCEPILFE": ["Core PCE Price Index (YoY)", "Core PCE Price Index", "Core PCE Prices"],
+            "A191RL1Q225SBEA": ["GDP (QoQ)", "GDP", "GDP Annualized"], "RSAFS": ["Retail Sales (MoM)", "Retail Sales"], "ICSA": ["Initial Jobless Claims"]}
 def nq_num(x):
     x = (x or "").replace("&nbsp;", "").replace(",", "").strip()
     m = re.fullmatch(r"(-?\d+(?:\.\d+)?)\s*([KMB%]?)", x)
@@ -769,7 +770,7 @@ def nq_on(date, cache):
 
 def nq_day(date, cache):
     """그날 미국 경제지표 발표 (이름 → (실제, 예상)). 지난 날짜는 바뀌지 않으니 한 번 받으면 저장"""
-    if date in cache: return cache[date]
+    if date in cache and cache[date] and isinstance(next(iter(cache[date].values())), list) and cache[date] and isinstance(next(iter(cache[date].values()))[0], list): return cache[date]
     r = get(f"https://api.nasdaq.com/api/calendar/economicevents?date={date}", headers=NQ_HDR)
     try: rows = r.json()["data"]["rows"] or []
     except Exception: return {}
@@ -777,13 +778,14 @@ def nq_day(date, cache):
     for x in rows:
         if x.get("country") != "United States": continue
         a, c = nq_num(x.get("actual")), nq_num(x.get("consensus"))
-        if a is not None or c is not None: out[x["eventName"].strip()] = [a, c]
-    if date < time.strftime("%Y-%m-%d", time.gmtime(NOW - 2 * 86400)): cache[date] = out
+        if a is not None or c is not None: out.setdefault(x["eventName"].strip(), []).append([a, c])
+    if out and date < time.strftime("%Y-%m-%d", time.gmtime(NOW - 2 * 86400)): cache[date] = out
+    return out
     return out
 
 def do_econ():
     old = load(path("econ.json"), {}) or {}
-    full = stale("econ", 3 * 3600) or not old.get("ind") or old.get("v") != 4   # 일정은 매번(20분), FRED 기록은 3시간마다
+    full = stale("econ", 3 * 3600) or not old.get("ind") or old.get("v") != 5   # 일정은 매번(20분), FRED 기록은 3시간마다
     up = []
     for wk in ("thisweek", "nextweek"):
         for e in ff_week(wk):
@@ -799,7 +801,9 @@ def do_econ():
         if e["at"] < NOW * 1000 and e["nq"] and not e["act"]:
             d = time.strftime("%Y-%m-%d", time.gmtime(e["at"] / 1000 - 5 * 3600))   # 미국 동부 날짜
             if d not in days: days[d] = nq_on(d, {})
-            v = days[d].get(e["nq"])
+            cands = [ac for ac in days[d].get(e["nq"], []) if ac[0] is not None]
+            fcn = nq_num(e["fc"])
+            v = min(cands, key=lambda ac: abs((ac[1] if ac[1] is not None else ac[0]) - fcn) if fcn is not None else 0) if cands else None
             if v and v[0] is not None:
                 raw = next((x for x in [e["fc"], e["pv"]] if x), "")
                 unit = "%" if raw.endswith("%") else "K" if raw.endswith("K") else "M" if raw.endswith("M") else "B" if raw.endswith("B") else ""
@@ -856,10 +860,11 @@ def do_econ():
                 with ThreadPoolExecutor(8) as ex: days = list(ex.map(lambda h: nq_on(h["d"], nqc), todo))
                 hit = 0
                 for h, day in zip(todo, days):
-                    ev = next((day[n] for n in names if n in day), None)
-                    if not ev: continue
-                    a, c = ev
                     scale = 1e-3 if sid == "PAYEMS" else 1          # 고용은 천 명 단위로
+                    cands = [ac for n in names for ac in day.get(n, []) if ac[0] is not None]
+                    if not cands: continue
+                    a, c = min(cands, key=lambda ac: abs(ac[0] * scale - h["v"]))
+                    if abs(a * scale - h["v"]) > max(1.0, abs(h["v"]) * 0.5): continue   # 너무 다르면 다른 지표로 보고 버림
                     if a is not None: h["a"] = round(a * scale, 3)
                     if c is not None: h["fc"] = round(c * scale, 3); hit += 1
                 print("  consensus", sid, hit, "/", len(todo))
@@ -874,7 +879,7 @@ def do_econ():
                 print("econ", sid, len(hist), "next", future[:1], hist[:2])
             except Exception as e: print("econ fail", sid, e)
         save(path("nqcal.json"), nqc)
-    save(path("econ.json"), {"at": int(NOW * 1000), "v": 4, "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
+    save(path("econ.json"), {"at": int(NOW * 1000), "v": 5, "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
 
 # ───────── 신규 상장 (IPO) ─────────
 # 큰 신규 상장은 앱·웹앱이 알맞은 섹터에 자동으로 넣어 줌 (사용자가 지우면 다시 안 넣음)
