@@ -622,6 +622,11 @@ IND_KO = {
     "Communications Equipment": "통신 장비", "Semiconductors": "반도체", "Steel": "철강", "Copper": "구리", "Gold": "금광", "Tobacco": "담배",
     "Footwear": "신발", "Specialty Chemicals": "특수 화학", "Aerospace & Defense": "항공우주·방산", "Insurance Brokers": "보험 중개",
 }
+# Yahoo 분류가 너무 넓은 테마 종목은 직접 지정 (예: 양자컴퓨터 회사가 '컴퓨터 하드웨어'로 나옴)
+IND_OVERRIDE = {**{t: "양자컴퓨팅" for t in ["IONQ", "QUBT", "RGTI", "QBTS", "ARQQ", "QMCO", "LAES", "XNDU"]},
+                "ASTS": "위성통신", "RKLB": "우주 발사체", "LUNR": "우주 탐사", "RDW": "우주 인프라", "PL": "위성 데이터", "SPCE": "우주 관광",
+                "005930.KS": "반도체·전자", "PLTR": "AI 데이터 분석", "OKLO": "원자력 (소형원전)", "SMR": "원자력 (소형원전)", "NNE": "원자력 (소형원전)"}
+IND_FIX = {"우주항공과국방": "항공우주·방산"}
 IND_CACHE = path("ind_ko_cache.json")
 
 def ind_ko(en, cache):
@@ -667,6 +672,8 @@ def do_ind(stocks):
             k = naver_ind(sym)
             if k: out[sym] = k
     for sym, v in old.items(): out.setdefault(sym, v)
+    out = {k: IND_FIX.get(v, v) for k, v in out.items()}
+    out.update({k: v for k, v in IND_OVERRIDE.items() if k in out or k in stocks})
     save(IND_CACHE, cache); save(path("ind.json"), out)
     miss = [s for s, st in stocks.items() if not st.get("etf") and s not in out]
     print("ind", len(out), "missing", len(miss), miss[:15])
