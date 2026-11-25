@@ -535,6 +535,143 @@ def weekly_snapshot(rows, bench):
     save(idx_path, idx)
     print("weekly snapshot", key, len(snap))
 
+# ───────── 종목 업종(한국어): 이름 옆에 "생명공학", "반도체" 처럼 ─────────
+YH_SECTORS = ["Basic Materials", "Communication Services", "Consumer Cyclical", "Consumer Defensive", "Energy",
+              "Financial Services", "Healthcare", "Industrials", "Real Estate", "Technology", "Utilities"]
+IND_KO = {
+    # Yahoo 업종
+    "Biotechnology": "생명공학", "Drug Manufacturers - General": "제약", "Drug Manufacturers - Specialty & Generic": "제약 (특수·복제약)",
+    "Medical Devices": "의료기기", "Medical Instruments & Supplies": "의료 장비·소모품", "Diagnostics & Research": "진단·연구",
+    "Health Information Services": "헬스케어 IT", "Healthcare Plans": "건강보험", "Medical Care Facilities": "병원·의료시설",
+    "Medical Distribution": "의약품 유통", "Pharmaceutical Retailers": "약국",
+    "Semiconductors": "반도체", "Semiconductor Equipment & Materials": "반도체 장비·소재", "Software - Application": "소프트웨어 (앱)",
+    "Software - Infrastructure": "소프트웨어 (인프라)", "Information Technology Services": "IT 서비스", "Computer Hardware": "컴퓨터 하드웨어",
+    "Communication Equipment": "통신 장비", "Electronic Components": "전자 부품", "Scientific & Technical Instruments": "계측·과학 장비",
+    "Consumer Electronics": "가전·전자제품", "Solar": "태양광", "Electronics & Computer Distribution": "전자제품 유통",
+    "Internet Content & Information": "인터넷 서비스", "Telecom Services": "통신 서비스", "Entertainment": "엔터테인먼트",
+    "Electronic Gaming & Multimedia": "게임", "Advertising Agencies": "광고", "Broadcasting": "방송", "Publishing": "출판",
+    "Aerospace & Defense": "항공우주·방산", "Airlines": "항공사", "Railroads": "철도", "Trucking": "트럭 운송",
+    "Integrated Freight & Logistics": "물류", "Marine Shipping": "해운", "Conglomerates": "복합기업",
+    "Specialty Industrial Machinery": "산업 기계", "Farm & Heavy Construction Machinery": "농기계·중장비",
+    "Engineering & Construction": "건설·엔지니어링", "Electrical Equipment & Parts": "전기 장비", "Building Products & Equipment": "건축 자재",
+    "Industrial Distribution": "산업재 유통", "Rental & Leasing Services": "렌탈·리스", "Security & Protection Services": "보안 서비스",
+    "Specialty Business Services": "비즈니스 서비스", "Staffing & Employment Services": "인력 서비스", "Waste Management": "폐기물 처리",
+    "Tools & Accessories": "공구", "Metal Fabrication": "금속 가공", "Pollution & Treatment Controls": "환경 설비", "Consulting Services": "컨설팅",
+    "Auto Manufacturers": "자동차", "Auto Parts": "자동차 부품", "Auto & Truck Dealerships": "자동차 판매", "Recreational Vehicles": "레저 차량",
+    "Internet Retail": "온라인 쇼핑", "Specialty Retail": "전문 소매", "Apparel Retail": "의류 소매", "Home Improvement Retail": "주택 용품 소매",
+    "Department Stores": "백화점", "Discount Stores": "할인점", "Grocery Stores": "식료품점", "Restaurants": "외식", "Lodging": "호텔",
+    "Resorts & Casinos": "리조트·카지노", "Travel Services": "여행", "Gambling": "도박·베팅", "Leisure": "레저",
+    "Apparel Manufacturing": "의류", "Footwear & Accessories": "신발·잡화", "Luxury Goods": "명품", "Furnishings, Fixtures & Appliances": "가구·가전",
+    "Residential Construction": "주택 건설", "Packaging & Containers": "포장재", "Personal Services": "생활 서비스",
+    "Packaged Foods": "가공식품", "Beverages - Non-Alcoholic": "음료", "Beverages - Brewers": "맥주", "Beverages - Wineries & Distilleries": "주류",
+    "Confectioners": "제과", "Farm Products": "농산물", "Household & Personal Products": "생활용품·화장품", "Tobacco": "담배",
+    "Food Distribution": "식품 유통", "Education & Training Services": "교육",
+    "Oil & Gas Integrated": "석유 (종합)", "Oil & Gas E&P": "석유·가스 개발", "Oil & Gas Midstream": "석유·가스 운송",
+    "Oil & Gas Refining & Marketing": "정유", "Oil & Gas Equipment & Services": "유전 장비·서비스", "Oil & Gas Drilling": "시추",
+    "Uranium": "우라늄", "Thermal Coal": "석탄",
+    "Utilities - Regulated Electric": "전력", "Utilities - Renewable": "재생에너지 발전", "Utilities - Independent Power Producers": "발전 (민자)",
+    "Utilities - Diversified": "유틸리티", "Utilities - Regulated Gas": "가스", "Utilities - Regulated Water": "수도",
+    "Banks - Diversified": "대형 은행", "Banks - Regional": "지방 은행", "Capital Markets": "증권·투자은행", "Asset Management": "자산운용",
+    "Credit Services": "카드·결제·대출", "Financial Data & Stock Exchanges": "금융 데이터·거래소", "Insurance - Life": "생명보험",
+    "Insurance - Property & Casualty": "손해보험", "Insurance - Diversified": "보험", "Insurance - Reinsurance": "재보험",
+    "Insurance Brokers": "보험 중개", "Insurance - Specialty": "특수 보험", "Mortgage Finance": "주택 금융", "Financial Conglomerates": "금융 복합",
+    "Shell Companies": "스팩", "Specialty Chemicals": "특수 화학", "Chemicals": "화학", "Agricultural Inputs": "비료·농자재", "Steel": "철강",
+    "Aluminum": "알루미늄", "Copper": "구리", "Gold": "금광", "Silver": "은광", "Other Precious Metals & Mining": "귀금속 광산",
+    "Other Industrial Metals & Mining": "광산", "Building Materials": "건자재", "Lumber & Wood Production": "목재", "Paper & Paper Products": "제지",
+    "REIT - Specialty": "리츠 (특수)", "REIT - Retail": "리츠 (상가)", "REIT - Office": "리츠 (오피스)", "REIT - Residential": "리츠 (주거)",
+    "REIT - Industrial": "리츠 (물류)", "REIT - Healthcare Facilities": "리츠 (의료)", "REIT - Diversified": "리츠", "REIT - Hotel & Motel": "리츠 (호텔)",
+    "Real Estate Services": "부동산 서비스", "Real Estate - Development": "부동산 개발",
+    # S&P 500(GICS) 세부 업종
+    "Health Care Equipment": "의료기기", "Pharmaceuticals": "제약", "Life Sciences Tools & Services": "바이오 장비·서비스",
+    "Health Care Services": "헬스케어 서비스", "Managed Health Care": "건강보험", "Health Care Distributors": "의약품 유통",
+    "Health Care Facilities": "병원", "Health Care Supplies": "의료 소모품", "Application Software": "소프트웨어 (앱)",
+    "Systems Software": "소프트웨어 (시스템)", "Semiconductor Materials & Equipment": "반도체 장비·소재",
+    "Technology Hardware, Storage & Peripherals": "컴퓨터 하드웨어", "Electronic Equipment & Instruments": "전자 장비",
+    "IT Consulting & Other Services": "IT 서비스", "Internet Services & Infrastructure": "인터넷 인프라",
+    "Interactive Media & Services": "인터넷 서비스", "Movies & Entertainment": "영화·엔터테인먼트", "Interactive Home Entertainment": "게임",
+    "Integrated Telecommunication Services": "통신 서비스", "Wireless Telecommunication Services": "무선 통신", "Cable & Satellite": "케이블·위성",
+    "Industrial Conglomerates": "복합기업", "Building Products": "건축 자재", "Industrial Machinery & Supplies & Components": "산업 기계",
+    "Construction Machinery & Heavy Transportation Equipment": "중장비", "Electrical Components & Equipment": "전기 장비",
+    "Heavy Electrical Equipment": "중전기기", "Construction & Engineering": "건설·엔지니어링", "Air Freight & Logistics": "항공 물류",
+    "Passenger Airlines": "항공사", "Rail Transportation": "철도", "Cargo Ground Transportation": "육상 운송",
+    "Passenger Ground Transportation": "승차 공유", "Environmental & Facilities Services": "환경 서비스", "Human Resource & Employment Services": "인력 서비스",
+    "Research & Consulting Services": "리서치·컨설팅", "Data Processing & Outsourced Services": "데이터 처리", "Trading Companies & Distributors": "산업재 유통",
+    "Diversified Support Services": "비즈니스 서비스", "Agricultural & Farm Machinery": "농기계",
+    "Automobile Manufacturers": "자동차", "Automotive Parts & Equipment": "자동차 부품", "Automotive Retail": "자동차 판매",
+    "Broadline Retail": "온라인·종합 쇼핑", "Hotels, Resorts & Cruise Lines": "호텔·크루즈", "Casinos & Gaming": "카지노",
+    "Apparel, Accessories & Luxury Goods": "의류·명품", "Apparel Retail": "의류 소매", "Home Improvement Retail": "주택 용품 소매",
+    "Other Specialty Retail": "전문 소매", "Computer & Electronics Retail": "전자제품 소매", "Homebuilding": "주택 건설",
+    "Household Appliances": "가전", "Home Furnishings": "가구", "Leisure Products": "레저용품", "Distributors": "유통",
+    "Consumer Staples Merchandise Retail": "할인점", "Food Retail": "식료품점", "Drug Retail": "약국", "Packaged Foods & Meats": "가공식품",
+    "Soft Drinks & Non-alcoholic Beverages": "음료", "Brewers": "맥주", "Distillers & Vintners": "주류", "Household Products": "생활용품",
+    "Personal Care Products": "화장품·개인용품", "Agricultural Products & Services": "농산물", "Food Distributors": "식품 유통",
+    "Integrated Oil & Gas": "석유 (종합)", "Oil & Gas Exploration & Production": "석유·가스 개발", "Oil & Gas Storage & Transportation": "석유·가스 운송",
+    "Oil & Gas Equipment & Services": "유전 장비·서비스", "Electric Utilities": "전력", "Multi-Utilities": "유틸리티", "Gas Utilities": "가스",
+    "Water Utilities": "수도", "Independent Power Producers & Energy Traders": "발전 (민자)", "Renewable Electricity": "재생에너지 발전",
+    "Diversified Banks": "대형 은행", "Regional Banks": "지방 은행", "Investment Banking & Brokerage": "증권·투자은행",
+    "Asset Management & Custody Banks": "자산운용", "Consumer Finance": "카드·대출", "Transaction & Payment Processing Services": "결제",
+    "Financial Exchanges & Data": "금융 데이터·거래소", "Life & Health Insurance": "생명보험", "Property & Casualty Insurance": "손해보험",
+    "Multi-line Insurance": "보험", "Reinsurance": "재보험", "Multi-Sector Holdings": "지주회사", "Fertilizers & Agricultural Chemicals": "비료",
+    "Commodity Chemicals": "범용 화학", "Diversified Chemicals": "화학", "Industrial Gases": "산업용 가스", "Metal, Glass & Plastic Containers": "포장재",
+    "Paper & Plastic Packaging Products & Materials": "포장재", "Construction Materials": "건자재", "Data Center REITs": "리츠 (데이터센터)",
+    "Telecom Tower REITs": "리츠 (통신탑)", "Industrial REITs": "리츠 (물류)", "Retail REITs": "리츠 (상가)", "Multi-Family Residential REITs": "리츠 (주거)",
+    "Single-Family Residential REITs": "리츠 (주택)", "Health Care REITs": "리츠 (의료)", "Office REITs": "리츠 (오피스)", "Self-Storage REITs": "리츠 (창고)",
+    "Hotel & Resort REITs": "리츠 (호텔)", "Timber REITs": "리츠 (산림)", "Other Specialized REITs": "리츠 (특수)", "Real Estate Services": "부동산 서비스",
+    "Restaurants": "외식", "Education Services": "교육", "Advertising": "광고", "Broadcasting": "방송", "Publishing": "출판",
+    "Electronic Components": "전자 부품", "Electronic Manufacturing Services": "전자제품 위탁생산", "Technology Distributors": "전자제품 유통",
+    "Communications Equipment": "통신 장비", "Semiconductors": "반도체", "Steel": "철강", "Copper": "구리", "Gold": "금광", "Tobacco": "담배",
+    "Footwear": "신발", "Specialty Chemicals": "특수 화학", "Aerospace & Defense": "항공우주·방산", "Insurance Brokers": "보험 중개",
+}
+IND_CACHE = path("ind_ko_cache.json")
+
+def ind_ko(en, cache):
+    en = (en or "").strip()
+    if not en: return ""
+    if en in IND_KO: return IND_KO[en]
+    if en not in cache:
+        cache[en] = (ko_translate(en) or en).strip()
+    return cache[en]
+
+def yahoo_ind(joined):
+    """metrics._ind = '섹터 업종' → 업종만"""
+    for s0 in YH_SECTORS:
+        if joined.startswith(s0 + " "): return joined[len(s0) + 1:]
+    return joined
+
+def naver_ind(sym):
+    """한국 종목: 네이버 업종 이름 (Yahoo에 업종이 없을 때)"""
+    code = sym.split(".")[0]
+    try:
+        j = S.get(f"https://m.stock.naver.com/api/stock/{code}/integration", timeout=15).json()
+        ic = j.get("industryCode") or (j.get("stockItem") or {}).get("industryCode")
+        if not ic: return ""
+        g = S.get(f"https://m.stock.naver.com/api/stocks/industry/{ic}", params={"page": 1, "pageSize": 1}, timeout=15).json()
+        return ((g.get("groupInfo") or {}).get("name") or "").strip()
+    except Exception as e: print("naver ind fail", sym, e); return ""
+
+def do_ind(stocks):
+    """ind.json = {종목: 한국어 업종} — 내 목록·S&P 500 전부. 업종은 잘 안 바뀌니 기존 값 재사용"""
+    old = load(path("ind.json"), {}) or {}
+    cache = load(IND_CACHE, {}) or {}
+    metrics = load(path("metrics.json"), {}) or {}
+    sp = load(path("sp500.json"), {}) or {}
+    out = {}
+    for m in sp.get("m", []):
+        if len(m) > 3 and m[3]: out[m[0]] = ind_ko(m[3], cache)
+    for sym, st in stocks.items():
+        if st.get("etf"): continue
+        en = yahoo_ind((metrics.get(sym) or {}).get("_ind", ""))
+        if en: out[sym] = ind_ko(en, cache)
+        elif old.get(sym): out[sym] = old[sym]
+        elif is_kr(sym):
+            k = naver_ind(sym)
+            if k: out[sym] = k
+    for sym, v in old.items(): out.setdefault(sym, v)
+    save(IND_CACHE, cache); save(path("ind.json"), out)
+    miss = [s for s, st in stocks.items() if not st.get("etf") and s not in out]
+    print("ind", len(out), "missing", len(miss), miss[:15])
+    return out
+
 def do_signals(stocks, q):
     """내 목록 + S&P 500 전 종목의 신호를 계산해서 signals.json 으로 (앱·웹앱의 '매수 신호 많은 종목' 화면용)"""
     sp = load(path("sp500.json"), {}) or {}
@@ -554,6 +691,7 @@ def do_signals(stocks, q):
         except Exception as e: print("chart fail", sym, e)
     with ThreadPoolExecutor(6) as ex: list(ex.map(do_chart, extra))
     spq = sp.get("q", {})
+    IND = load(path("ind.json"), {}) or {}
     rows = {}
     for sym in list(stocks) + extra:
         f = fname(sym)
@@ -565,7 +703,7 @@ def do_signals(stocks, q):
         sig = price_signals(daily, weekly, px, sym.startswith("^"), sym)
         if not sig: continue
         rows[sym] = {"n": st.get("ko") or names.get(sym, sym), "etf": bool(st.get("etf")), "my": sym in stocks, "sp": sym in names,
-                     "sec": sectors.get(sym, ""), "s": sig, "p": rnd(px)}
+                     "sec": sectors.get(sym, ""), "ind": IND.get(sym, ""), "s": sig, "p": rnd(px)}
     bench = {b: rnd((q.get(b) or {}).get("price")) for b in BENCH}
     save(path("signals.json"), {"at": int(NOW * 1000), "rows": rows, "bench": bench})
     weekly_snapshot(rows, bench)
@@ -1244,6 +1382,8 @@ def main():
     except Exception as e: print('disc fail', e)
     try: do_hub(static)
     except Exception as e: print('hub fail', e)
+    try: do_ind(stocks)
+    except Exception as e: print("ind fail", e)
     try: do_signals(stocks, q)
     except Exception as e: print('signals fail', e)
     try: do_econ()

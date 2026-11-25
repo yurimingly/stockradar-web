@@ -523,7 +523,7 @@ function homeRow(st, secName, badge, badgeColor, badge2) {
   }
   const sp = shownPct(q || {}), mp = monthPct(q), ex = extLine(q);
   return `<div class="srow" data-sym="${esc(st.t)}">
-    <div class="grow" style="min-width:0"><div class="nm">${esc(st.t)}${S.favs.has(st.t) ? " ★" : ""}</div><div class="tk">${esc(st.ko)}${secName ? " · " + esc(secName) : ""}</div>
+    <div class="grow" style="min-width:0"><div class="nm">${esc(st.t)}${S.favs.has(st.t) ? " ★" : ""}</div><div class="tk">${esc(st.ko)}${indOf(st.t) ? " · " + esc(indOf(st.t)) : ""}${secName ? " · " + esc(secName) : ""}</div>
       ${badge ? `<div class="small b ell" style="color:${badgeColor};margin-top:2px">${esc(badge)}</div>` : ""}${badge2 ? `<div class="sub ell2" style="margin-top:2px">${esc(badge2)}</div>` : ""}</div>
     ${spark(q?.sp, mp == null ? "#8B8FA3" : mp >= 0 ? "#22C55E" : "#EF4444")}
     <div style="width:92px;text-align:right;flex:none"><div class="b">${q ? money(q.price, st.t) : "—"}</div>
@@ -697,7 +697,7 @@ async function renderDetail(sym) {
   setHeader(sym, true);
   const inList = sectorIdx(sym) >= 0, kr = isKr(sym);
   $("#app").innerHTML = `
-    <div class="between"><div style="min-width:0"><div class="b" style="font-size:22px">${esc(sym)}</div><div class="sub" style="font-size:13px">${esc(st.ko)}${st.etf ? " · ETF" : ""}</div></div><button class="iconbtn" id="favBtn" style="font-size:26px;color:${S.favs.has(sym) ? "#FFC93C" : "var(--sub)"}">${S.favs.has(sym) ? "★" : "☆"}</button></div>
+    <div class="between"><div style="min-width:0"><div class="b" style="font-size:22px">${esc(sym)}</div><div class="sub" style="font-size:13px">${esc(st.ko)}${st.etf ? " · ETF" : indOf(sym) ? " · " + esc(indOf(sym)) : ""}</div></div><button class="iconbtn" id="favBtn" style="font-size:26px;color:${S.favs.has(sym) ? "#FFC93C" : "var(--sub)"}">${S.favs.has(sym) ? "★" : "☆"}</button></div>
     <div id="spBadge"></div>${inList ? "" : `<button class="btn" id="addMine" style="width:auto;padding:8px 12px;font-size:13px;margin-top:6px">＋ 내 목록에 추가 (섹터 자동 분류)</button>`}
     <div class="big" id="dPrice" style="margin-top:8px">—</div><div id="dChg" class="b"></div><div id="dKrw" class="sub" style="font-size:13px"></div><div id="dExt" class="small b" style="margin-top:2px"></div>
     <div class="card" style="margin-top:10px"><div id="cInfo" class="sub" style="min-height:18px">차트를 손가락으로 밀면 그날 가격이 나와요</div><canvas class="chart" id="cv"></canvas>
@@ -944,7 +944,7 @@ async function renderDiscover() {
   bindChips($("#app"), "ds", v => { D.scr = v; renderDiscover(); });
   bindChips($("#app"), "df", v => { D.feed = v; renderDiscover(); });
   const d = await data("disc.json", 300_000) || {};
-  const row = (x, extra) => `<div class="srow" data-open="${esc(x.sym)}" data-name="${esc(x.name || x.sym)}"><div class="grow" style="min-width:0"><div class="nm">${esc(x.sym)}${mine.has(x.sym) ? ` <span class="small g">✓ 내 목록</span>` : ""}</div><div class="tk">${esc(x.name || "")}</div>
+  const row = (x, extra) => `<div class="srow" data-open="${esc(x.sym)}" data-name="${esc(x.name || x.sym)}"><div class="grow" style="min-width:0"><div class="nm">${esc(x.sym)}${mine.has(x.sym) ? ` <span class="small g">✓ 내 목록</span>` : ""}</div><div class="tk">${esc(x.name || "")}${indOf(x.sym) ? " · " + esc(indOf(x.sym)) : ""}</div>
     <div class="sub">${[x.cap > 0 ? "시총 " + bigUsd(x.cap) : "", x.pe ? "PER " + f1(x.pe) : "", extra || ""].filter(Boolean).join(" · ")}</div></div>
     <div style="text-align:right;flex:none"><div class="b">${money(x.price, x.sym)}</div><span class="pill" style="background:${(x.pct || 0) >= 0 ? "var(--green)" : "var(--red)"}">${pct(x.pct)}</span></div></div>`;
   let b = "";
@@ -1355,7 +1355,7 @@ async function renderScreener() {
   for (const r of list.slice(0, 300)) {
     if (r.g !== last) { last = r.g; const cnt = list.filter(x => x.g === r.g).length;
       h += `<div class="b" style="margin:14px 4px 6px;font-size:15px;color:${r.g >= 4 ? GOOD : r.g >= 3 ? "#7BD88F" : "var(--text)"}">${r.g === r.total ? `🟢 ${r.g}개 모두 초록` : `🟢 ${r.g}개`} <span class="sub">· ${cnt}종목${r.g >= 4 ? " · 여러 지표가 같이 바닥권" : r.g === 3 ? " · 비중 크게 고려 구간" : r.g === 2 ? " · 매수 준비" : ""}</span></div>`; }
-    h += `<div class="card" style="padding:11px 14px;margin-bottom:6px" data-open="${esc(r.sym)}" data-name="${esc(r.n)}"><div class="between"><div style="min-width:0"><b>${esc(r.sym)}</b>${r.my ? ` <span class="small g">✓ 내 목록</span>` : ""}<div class="sub ell">${esc(r.n)}${r.sec ? " · " + esc(gicsKo(r.sec)) : ""}</div></div>
+    h += `<div class="card" style="padding:11px 14px;margin-bottom:6px" data-open="${esc(r.sym)}" data-name="${esc(r.n)}"><div class="between"><div style="min-width:0"><b>${esc(r.sym)}</b>${r.my ? ` <span class="small g">✓ 내 목록</span>` : ""}<div class="sub ell">${esc(r.n)}${(r.ind || indOf(r.sym)) ? " · " + esc(r.ind || indOf(r.sym)) : r.sec ? " · " + esc(gicsKo(r.sec)) : ""}</div></div>
       <div style="text-align:right;flex:none"><b class="g">🟢${r.g}</b> <span style="color:${AMB}">🟡${r.y}</span><div class="sub">/ ${r.total}개</div></div></div>
       <div class="chips" style="margin-top:6px;flex-wrap:wrap;overflow:visible">${r.s.map(([n, v, st]) => `<span class="badge" style="background:${SIG_COLOR[st]};font-size:11px;padding:3px 7px">${esc(n)} ${esc(v)}</span>`).join("")}</div></div>`;
   }
@@ -1392,7 +1392,7 @@ async function renderSigHistory(viewChips) {
   h += `<div class="sub" style="margin-top:6px">초록이 많을수록 수익률이 높으면 신호가 잘 맞은 거예요. 기간이 짧으면 우연일 수 있어서 몇 주 이상 쌓아서 보는 게 좋아요.</div></div>`;
   if (!rows.length) h += note("이 조건에 맞는 종목이 없어요.");
   h += `<div class="b" style="margin:12px 4px 6px">종목별 (수익률 높은 순)</div>` + rows.sort((a, b) => b.r - a.r).map(x =>
-    `<div class="card row" style="padding:10px 14px;margin-bottom:5px" data-open="${esc(x.sym)}" data-name="${esc(x.n)}"><div class="grow" style="min-width:0"><b>${esc(x.sym)}</b> <span class="small g">🟢${x.g}</span><div class="sub ell">${esc(x.n)} · ${money(x.p, x.sym)} → ${money(x.now, x.sym)}</div></div><b class="${cls(x.r)}" style="font-size:15px">${pct(x.r)}</b></div>`).join("");
+    `<div class="card row" style="padding:10px 14px;margin-bottom:5px" data-open="${esc(x.sym)}" data-name="${esc(x.n)}"><div class="grow" style="min-width:0"><b>${esc(x.sym)}</b> <span class="small g">🟢${x.g}</span><div class="sub ell">${esc(x.n)}${indOf(x.sym) ? " · " + esc(indOf(x.sym)) : ""} · ${money(x.p, x.sym)} → ${money(x.now, x.sym)}</div></div><b class="${cls(x.r)}" style="font-size:15px">${pct(x.r)}</b></div>`).join("");
   h += note("매주 한 번 자동 저장돼요. 기록은 계속 쌓이고 지워지지 않아요. 투자 판단의 참고용이에요.");
   $("#shBody").innerHTML = h;
 }
@@ -1403,6 +1403,14 @@ async function loadEconSoon() {
   const d = await data("econ.json", 600_000); if (!d?.up) return;
   const now = Date.now(); ECON_SOON = d.up.filter(e => e.imp === "High" && e.at > now - 3600_000 && e.at < now + 86400_000);
   if (ECON_SOON.length && route().name === "home" && H.tab !== -3) renderHome(true);
+}
+// 종목 업종(한국어) — 이름 옆에 "생명공학", "반도체" 처럼
+let IND = LS.get("indCache", {});
+const indOf = sym => IND[sym] || "";
+async function loadInd() {
+  const d = await data("ind.json", 6 * 3600_000); if (!d) return;
+  const changed = JSON.stringify(d) !== JSON.stringify(IND); IND = d; LS.set("indCache", d);
+  if (changed && route().name === "home") renderHome(true);
 }
 let X_NEW = [];
 async function loadXNew() {
@@ -1545,6 +1553,6 @@ async function applyIpos() {
   await Promise.all([loadCatalog(), loadStatic()]);
   if (!location.hash) { const last = LS.get("lastHash", ""); if (last && last !== "#/") { location.hash = last; return; } }
   render();
-  applyIpos().then(applyFill); loadEconSoon(); loadXNew();
+  applyIpos().then(applyFill); loadEconSoon(); loadXNew(); loadInd();
 })();
 document.addEventListener("visibilitychange", () => { if (!document.hidden && route().name === "home") refreshQuotes(false); });
