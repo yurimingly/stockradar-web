@@ -719,6 +719,17 @@ FF_KO = {"CPI m/m": "소비자물가 (전월비)", "CPI y/y": "소비자물가 (
          "Flash Manufacturing PMI": "제조업 PMI (예비)", "Flash Services PMI": "서비스업 PMI (예비)", "Personal Spending m/m": "개인소비", "Personal Income m/m": "개인소득",
          "Trade Balance": "무역수지", "Crude Oil Inventories": "원유 재고", "Prelim GDP Price Index q/q": "GDP 물가지수", "Employment Cost Index q/q": "고용비용지수"}
 
+# Forex Factory 이름 → Nasdaq 경제 캘린더 이름 (앱이 발표 직후 실제치를 바로 받아올 때 씀)
+FF_NQ = {"CPI m/m": "CPI (MoM)", "CPI y/y": "CPI (YoY)", "Core CPI m/m": "Core CPI (MoM)", "Non-Farm Employment Change": "Nonfarm Payrolls",
+         "Unemployment Rate": "Unemployment Rate", "PPI m/m": "PPI (MoM)", "Core PPI m/m": "Core PPI (MoM)", "Core PCE Price Index m/m": "Core PCE Price Index (MoM)",
+         "Advance GDP q/q": "GDP (QoQ)", "Prelim GDP q/q": "GDP (QoQ)", "Final GDP q/q": "GDP (QoQ)", "Retail Sales m/m": "Retail Sales (MoM)",
+         "Core Retail Sales m/m": "Core Retail Sales (MoM)", "Unemployment Claims": "Initial Jobless Claims", "Federal Funds Rate": "Fed Interest Rate Decision",
+         "ISM Manufacturing PMI": "ISM Manufacturing PMI", "ISM Services PMI": "ISM Non-Manufacturing PMI", "JOLTS Job Openings": "JOLTS Job Openings",
+         "ADP Non-Farm Employment Change": "ADP Nonfarm Employment Change", "CB Consumer Confidence": "CB Consumer Confidence",
+         "Average Hourly Earnings m/m": "Average Hourly Earnings (MoM)", "Prelim UoM Consumer Sentiment": "Michigan Consumer Sentiment",
+         "Revised UoM Consumer Sentiment": "Michigan Consumer Sentiment", "Durable Goods Orders m/m": "Durable Goods Orders (MoM)",
+         "Core Durable Goods Orders m/m": "Core Durable Goods Orders (MoM)", "Prelim GDP Price Index q/q": "GDP Price Index (QoQ)"}
+
 def fred(path_, **params):
     params.update(api_key=FRED_KEY, file_type="json")
     r = get("https://api.stlouisfed.org/fred/" + path_ + "?" + urllib.parse.urlencode(params))
@@ -751,6 +762,11 @@ def nq_num(x):
     if not m: return None
     v = float(m.group(1))
     return v * {"K": 1e3, "M": 1e6, "B": 1e9}.get(m.group(2), 1)
+def nq_on(date, cache):
+    """date(미국 날짜)에 나온 발표. Nasdaq API는 ?date= 다음 날로 물어야 그날 발표가 나와요 (시간대 차이)"""
+    import datetime as _dt
+    return nq_day((_dt.date.fromisoformat(date) + _dt.timedelta(days=1)).isoformat(), cache)
+
 def nq_day(date, cache):
     """그날 미국 경제지표 발표 (이름 → (실제, 예상)). 지난 날짜는 바뀌지 않으니 한 번 받으면 저장"""
     if date in cache: return cache[date]
@@ -762,12 +778,12 @@ def nq_day(date, cache):
         if x.get("country") != "United States": continue
         a, c = nq_num(x.get("actual")), nq_num(x.get("consensus"))
         if a is not None or c is not None: out[x["eventName"].strip()] = [a, c]
-    if date < time.strftime("%Y-%m-%d", time.gmtime(NOW - 86400)): cache[date] = out
+    if date < time.strftime("%Y-%m-%d", time.gmtime(NOW - 2 * 86400)): cache[date] = out
     return out
 
 def do_econ():
     old = load(path("econ.json"), {}) or {}
-    if not stale("econ", 3 * 3600) and old.get("ind") and old.get("v") == 3: return
+    full = stale("econ", 3 * 3600) or not old.get("ind") or old.get("v") != 3   # 일정은 매번(20분), FRED 기록은 3시간마다
     up = []
     for wk in ("thisweek", "nextweek"):
         for e in ff_week(wk):
@@ -775,9 +791,23 @@ def do_econ():
             try: ms = int(__import__("datetime").datetime.fromisoformat(e["date"]).timestamp() * 1000)
             except Exception: continue
             up.append({"t": e.get("title"), "ko": FF_KO.get(e.get("title"), e.get("title")), "at": ms, "imp": e.get("impact"),
-                       "fc": e.get("forecast") or "", "pv": e.get("previous") or "", "act": e.get("actual") or ""})
+                       "fc": e.get("forecast") or "", "pv": e.get("previous") or "", "act": e.get("actual") or "", "nq": FF_NQ.get(e.get("title"), "")})
     up.sort(key=lambda x: x["at"])
+    # 이미 발표된 건 Nasdaq 경제 캘린더에서 실제치 붙이기
+    days = {}
+    for e in up:
+        if e["at"] < NOW * 1000 and e["nq"] and not e["act"]:
+            d = time.strftime("%Y-%m-%d", time.gmtime(e["at"] / 1000 - 5 * 3600))   # 미국 동부 날짜
+            if d not in days: days[d] = nq_on(d, {})
+            v = days[d].get(e["nq"])
+            if v and v[0] is not None:
+                raw = next((x for x in [e["fc"], e["pv"]] if x), "")
+                unit = "%" if raw.endswith("%") else "K" if raw.endswith("K") else "M" if raw.endswith("M") else "B" if raw.endswith("B") else ""
+                a = v[0] / {"K": 1e3, "M": 1e6, "B": 1e9}.get(unit, 1)
+                e["act"] = (f"{a:.1f}" if unit in ("%", "") and abs(a) < 1000 else f"{a:,.0f}") + unit
     print("econ calendar", len(up), "fred key", bool(FRED_KEY))
+    if not full:
+        save(path("econ.json"), {**old, "up": up}); return
     ind = []
     if FRED_KEY:
         sp, nq = day_moves("^GSPC"), day_moves("^IXIC")
@@ -823,7 +853,7 @@ def do_econ():
                 # 예상치(컨센서스)와 첫 발표 실제치 붙이기 — 최근 8년(주간 지표는 2년)
                 names = NQ_NAMES.get(sid, [])
                 todo = [h for h in hist if h["d"] >= time.strftime("%Y-%m-%d", time.gmtime(NOW - (2 if sid == "ICSA" else 8) * 365 * 86400))]
-                with ThreadPoolExecutor(6) as ex: days = list(ex.map(lambda h: nq_day(h["d"], nqc), todo))
+                with ThreadPoolExecutor(8) as ex: days = list(ex.map(lambda h: nq_on(h["d"], nqc), todo))
                 hit = 0
                 for h, day in zip(todo, days):
                     ev = next((day[n] for n in names if n in day), None)
