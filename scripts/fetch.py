@@ -693,6 +693,106 @@ def do_fill(catalog):
     save(path("fill.json"), out); mark("fill")
     return out
 
+# ───────── 경제 캘린더 (발표 일정 · 실제 수치 · 발표일 주가 반응) ─────────
+FRED_KEY = os.environ.get("FRED_API_KEY", "")
+# (FRED 발표 ID, 시리즈, 이름, 값 계산: yoy=전년비 %, mom=전월비 %, chg=전월 대비 증감, lvl=그대로, 단위, 설명)
+ECON = [
+    (10, "CPIAUCSL", "소비자물가(CPI)", "yoy", "%", "물가가 1년 전보다 얼마나 올랐는지. 예상보다 높으면 금리 인하 기대가 줄어 주가에 부담"),
+    (10, "CPILFESL", "근원 CPI (식품·에너지 제외)", "yoy", "%", "변동 큰 식품·에너지를 뺀 물가. 연준이 더 중요하게 봐요"),
+    (50, "PAYEMS", "비농업 고용 (고용보고서)", "chg", "천 명", "한 달 동안 늘어난 일자리 수. 너무 강하면 금리 부담, 너무 약하면 경기 걱정"),
+    (50, "UNRATE", "실업률", "lvl", "%", "일자리를 찾는데 못 구한 사람 비율. 빠르게 오르면 경기 침체 신호"),
+    (46, "PPIFIS", "생산자물가(PPI)", "yoy", "%", "기업이 받는 가격. 소비자물가보다 먼저 움직이는 경우가 많아요"),
+    (54, "PCEPILFE", "근원 PCE 물가", "yoy", "%", "연준이 목표(2%)로 삼는 물가 지표"),
+    (53, "A191RL1Q225SBEA", "GDP 성장률 (연율)", "lvl", "%", "경제가 얼마나 성장했는지 (분기)"),
+    (9, "RSAFS", "소매판매", "mom", "%", "소비가 한 달 전보다 얼마나 늘었는지. 미국 경제의 70%가 소비"),
+    (180, "ICSA", "신규 실업수당 청구", "lvl", "건", "매주 새로 실업수당을 신청한 사람 수. 늘어나면 고용 둔화 신호"),
+]
+FF_KO = {"CPI m/m": "소비자물가 (전월비)", "CPI y/y": "소비자물가 (전년비)", "Core CPI m/m": "근원 소비자물가 (전월비)", "Non-Farm Employment Change": "비농업 고용",
+         "Unemployment Rate": "실업률", "PPI m/m": "생산자물가 (전월비)", "Core PPI m/m": "근원 생산자물가 (전월비)", "Core PCE Price Index m/m": "근원 PCE 물가 (전월비)",
+         "Advance GDP q/q": "GDP 속보치", "Prelim GDP q/q": "GDP 잠정치", "Final GDP q/q": "GDP 확정치", "Retail Sales m/m": "소매판매", "Core Retail Sales m/m": "근원 소매판매",
+         "Unemployment Claims": "신규 실업수당 청구", "Federal Funds Rate": "기준금리 결정 (FOMC)", "FOMC Statement": "FOMC 성명", "FOMC Press Conference": "파월 의장 기자회견",
+         "FOMC Meeting Minutes": "FOMC 의사록", "ISM Manufacturing PMI": "ISM 제조업 지수", "ISM Services PMI": "ISM 서비스업 지수", "JOLTS Job Openings": "구인건수 (JOLTS)",
+         "ADP Non-Farm Employment Change": "ADP 민간 고용", "CB Consumer Confidence": "소비자신뢰지수", "Prelim UoM Consumer Sentiment": "미시간대 소비심리 (예비)",
+         "Revised UoM Consumer Sentiment": "미시간대 소비심리 (확정)", "Average Hourly Earnings m/m": "시간당 임금 (전월비)", "Durable Goods Orders m/m": "내구재 주문",
+         "Core Durable Goods Orders m/m": "근원 내구재 주문", "Pending Home Sales m/m": "잠정 주택판매", "New Home Sales": "신규 주택판매", "Existing Home Sales": "기존 주택판매",
+         "Building Permits": "건축허가", "Housing Starts": "주택착공", "Empire State Manufacturing Index": "뉴욕 제조업 지수", "Philly Fed Manufacturing Index": "필라델피아 제조업 지수",
+         "Flash Manufacturing PMI": "제조업 PMI (예비)", "Flash Services PMI": "서비스업 PMI (예비)", "Personal Spending m/m": "개인소비", "Personal Income m/m": "개인소득",
+         "Trade Balance": "무역수지", "Crude Oil Inventories": "원유 재고", "Prelim GDP Price Index q/q": "GDP 물가지수", "Employment Cost Index q/q": "고용비용지수"}
+
+def fred(path_, **params):
+    params.update(api_key=FRED_KEY, file_type="json")
+    r = get("https://api.stlouisfed.org/fred/" + path_ + "?" + urllib.parse.urlencode(params))
+    try: return r.json() if r and r.status_code == 200 else None
+    except Exception: return None
+
+def day_moves(sym):
+    d = load(path("h", fname(sym) + ".json"))
+    if not d: return {}
+    out, prev = {}, None
+    for t, c in zip(d["t"], d["c"]):
+        if c is None: continue
+        if prev: out[time.strftime("%Y-%m-%d", time.gmtime(t))] = (c / prev - 1) * 100
+        prev = c
+    return out
+
+def ff_week(which):
+    r = get(f"https://nfs.faireconomy.media/ff_calendar_{which}.json")
+    try: return r.json() if r and r.status_code == 200 else []
+    except Exception: return []
+
+def do_econ():
+    old = load(path("econ.json"), {}) or {}
+    if not stale("econ", 3 * 3600) and old.get("ind"): return
+    up = []
+    for wk in ("thisweek", "nextweek"):
+        for e in ff_week(wk):
+            if e.get("country") != "USD" or e.get("impact") not in ("High", "Medium"): continue
+            try: ms = int(__import__("datetime").datetime.fromisoformat(e["date"]).timestamp() * 1000)
+            except Exception: continue
+            up.append({"t": e.get("title"), "ko": FF_KO.get(e.get("title"), e.get("title")), "at": ms, "imp": e.get("impact"),
+                       "fc": e.get("forecast") or "", "pv": e.get("previous") or "", "act": e.get("actual") or ""})
+    up.sort(key=lambda x: x["at"])
+    print("econ calendar", len(up), "fred key", bool(FRED_KEY))
+    ind = []
+    if FRED_KEY:
+        sp, nq = day_moves("^GSPC"), day_moves("^IXIC")
+        start = time.strftime("%Y-%m-%d", time.gmtime(NOW - 8 * 365 * 86400))
+        rel_cache = {}
+        for rid, sid, name, how, unit, desc in ECON:
+            try:
+                if rid not in rel_cache:
+                    j = fred("release/dates", release_id=rid, realtime_start=start, realtime_end="9999-12-31", include_release_dates_with_no_data="true", limit=10000)
+                    rel_cache[rid] = sorted({x["date"] for x in (j or {}).get("release_dates", [])})
+                dates = rel_cache[rid]
+                today = time.strftime("%Y-%m-%d", time.gmtime(NOW))
+                past, future = [d for d in dates if d <= today], [d for d in dates if d > today]
+                j = fred("series/observations", series_id=sid, observation_start=time.strftime("%Y-%m-%d", time.gmtime(NOW - 10 * 365 * 86400)))
+                obs = [(o["date"], float(o["value"])) for o in (j or {}).get("observations", []) if o.get("value") not in (".", None)]
+                if len(obs) < 14: continue
+                vals = []
+                for i, (d, v) in enumerate(obs):
+                    if how == "yoy":
+                        if i >= 12 and obs[i - 12][1]: vals.append((d, (v / obs[i - 12][1] - 1) * 100))
+                    elif how == "mom":
+                        if i >= 1 and obs[i - 1][1]: vals.append((d, (v / obs[i - 1][1] - 1) * 100))
+                    elif how == "chg":
+                        if i >= 1: vals.append((d, v - obs[i - 1][1]))
+                    else: vals.append((d, v))
+                # 발표일 ↔ 관측치: 가장 최근 발표가 가장 최근 관측치를 낸 것으로 맞춰서 거꾸로 짝지음 (주간 지표는 발표 1번 = 관측 1개)
+                hist = []
+                for k in range(1, min(len(past), len(vals) - 1) + 1):
+                    rd, (od, v), pv = past[-k], vals[-k], vals[-k - 1][1]
+                    hist.append({"d": rd, "obs": od, "v": round(v, 3), "pv": round(pv, 3), "sp": round(sp[rd], 2) if rd in sp else None, "nq": round(nq[rd], 2) if rd in nq else None})
+                def stat(rows):
+                    m = [x["sp"] for x in rows if x["sp"] is not None]
+                    return {"n": len(m), "avg": round(sum(m) / len(m), 2) if m else None, "win": round(sum(1 for x in m if x > 0) / len(m) * 100) if m else None}
+                ind.append({"id": sid, "name": name, "unit": unit, "desc": desc, "how": how, "next": future[0] if future else None,
+                            "hist": hist[:120], "up": stat([x for x in hist if x["v"] > x["pv"]]), "down": stat([x for x in hist if x["v"] < x["pv"]]),
+                            "all": stat(hist)})
+                print("econ", sid, len(hist), "next", future[:1])
+            except Exception as e: print("econ fail", sid, e)
+    save(path("econ.json"), {"at": int(NOW * 1000), "up": up, "ind": ind or old.get("ind", [])}); mark("econ")
+
 # ───────── 신규 상장 (IPO) ─────────
 # 큰 신규 상장은 앱·웹앱이 알맞은 섹터에 자동으로 넣어 줌 (사용자가 지우면 다시 안 넣음)
 AUTO_ADD_CAP = 10e9          # 시총 100억 달러 이상이면 자동 추가
@@ -930,6 +1030,8 @@ def main():
     except Exception as e: print('hub fail', e)
     try: do_signals(stocks, q)
     except Exception as e: print('signals fail', e)
+    try: do_econ()
+    except Exception as e: print('econ fail', e)
 
     meta["updatedAt"] = int(NOW * 1000)
     save(path("meta.json"), meta)

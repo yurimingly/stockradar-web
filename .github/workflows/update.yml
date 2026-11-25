@@ -30,6 +30,8 @@ jobs:
       - run: pip install requests
       - name: 데이터 받기
         run: python scripts/fetch.py
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       - name: 사이트 만들기
         run: |
           mkdir _site && cp -r web/* _site/ && cp -r data _site/data && touch _site/.nojekyll
