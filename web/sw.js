@@ -1,5 +1,5 @@
 // 앱 껍데기(html·css·js)만 캐시 — 데이터는 항상 새로 받음
-const V = "sr-v8";
+const V = "sr-v9";
 const SHELL = ["./", "index.html", "style.css", "app.js", "pages.js", "static.json", "catalog.json", "icon-180.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {

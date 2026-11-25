@@ -544,6 +544,7 @@ function renderHome(quotesOnly, force) {
       sum = `${baseLabel(qs)} · ${H.pctMode === 0 ? "전일 대비" : "최근 1개월"} ⇄<br>평균 ${pct(avg)} · 상승 ${ps.filter(p => p > 0).length} 하락 ${ps.filter(p => p < 0).length}${divs.length ? ` · 평균 배당 ${pct1(divs.reduce((a, b) => a + b, 0) / divs.length)}` : ""}`;
       sc = cls(avg);
     }
+    html += econBannerHtml();
     html += `<div class="between" style="margin:8px 2px"><div class="small b ${sc}" id="sumLine" style="line-height:1.45">${sum}</div><button class="chip sm" id="sortBtn">${SORT_NAMES[H.sort]} ⇅</button></div>`;
     if (H.tab === -2 && !items.length) html += `<div class="sub" style="text-align:center;padding:50px 16px;font-size:14px">관심 종목이 아직 없어요.<br><br>종목을 길게 누르거나, 상세 화면의 ☆를 눌러 추가하세요.</div>`;
     const kr = items.filter(([st]) => isKr(st.t)), us = items.filter(([st]) => !isKr(st.t));
@@ -558,7 +559,8 @@ function renderHome(quotesOnly, force) {
   $("#tabChips").scrollLeft = sx; if ($("#guruChips") && gx != null) $("#guruChips").scrollLeft = gx;
   if (quotesOnly) window.scrollTo(0, y);
   $("#tabChips").onscroll = e => LS.set("tabScroll", e.target.scrollLeft);
-  bindChips($("#tabChips"), "tab", t => { H.tab = t; saveH(); renderHome(true); window.scrollTo(0, 0); });
+  bindChips($("#tabChips"), "tab", t => { if (CHIP_DRAG.justDragged) return; H.tab = t; saveH(); renderHome(true); window.scrollTo(0, 0); });
+  $("#tabChips").querySelectorAll("[data-tab]").forEach(b => { if (+b.dataset.tab >= 0) chipDrag(b); });
   const app = $("#app");
   app.querySelectorAll(".srow").forEach(el => bindRow(el));
   if ($("#sortBtn")) $("#sortBtn").onclick = chooseSort;
@@ -633,6 +635,56 @@ function guruTabHtml() {
   }
   return h + (rows || `<div class="sub" style="padding:20px 4px">재무 지표를 불러오는 중이에요. 처음엔 GitHub이 지표를 다 모을 때까지(약 20분) 기다려 주세요.</div>`) +
     `<div class="sub" style="text-align:center;margin-top:12px">ETF는 개별 기업 재무가 없어 제외돼요. 지표는 Yahoo Finance 기준이며 12시간마다 갱신돼요.</div>`;
+}
+
+// 섹터 칩 꾹 누르기: 그대로 떼면 메뉴(이름·이모지·삭제), 누른 채 옆으로 끌면 순서 바꾸기
+const CHIP_DRAG = { justDragged: false };
+function chipDrag(chip) {
+  const row = $("#tabChips");
+  let timer, dragging = false, moved = false, startX = 0, base = 0;
+  const end = () => {
+    clearTimeout(timer);
+    if (!dragging) return;
+    dragging = false; chip.classList.remove("lift"); chip.style.transform = "";
+    CHIP_DRAG.justDragged = true; setTimeout(() => CHIP_DRAG.justDragged = false, 350);
+    const sec = S.sectors[+chip.dataset.tab];
+    if (!moved) return chipMenu(sec);
+    const cur = H.tab >= 0 ? S.sectors[H.tab] : null;
+    const order = [...row.querySelectorAll("[data-tab]")].map(b => +b.dataset.tab).filter(i => i >= 0).map(i => S.sectors[i]);
+    if (order.length === S.sectors.length) { S.sectors = order; if (cur) H.tab = S.sectors.indexOf(cur); S.save(); saveH(); renderHome(true); }
+  };
+  chip.addEventListener("touchstart", e => {
+    startX = base = e.touches[0].clientX; moved = false;
+    timer = setTimeout(() => { dragging = true; navigator.vibrate?.(20); chip.classList.add("lift"); }, 420);
+  }, { passive: true });
+  chip.addEventListener("touchmove", e => {
+    const x = e.touches[0].clientX;
+    if (!dragging) { if (Math.abs(x - startX) > 10) clearTimeout(timer); return; }
+    e.preventDefault();
+    if (Math.abs(x - startX) > 12) moved = true;
+    chip.style.transform = `translateX(${x - base}px) scale(1.1)`;
+    const r = chip.getBoundingClientRect(), cx = r.left + r.width / 2;
+    const next = chip.nextElementSibling, prev = chip.previousElementSibling;
+    if (next && +next.dataset.tab >= 0) { const n = next.getBoundingClientRect(); if (cx > n.left + n.width / 2) { const w = n.width + 8; row.insertBefore(next, chip); base += w; chip.style.transform = `translateX(${x - base}px) scale(1.1)`; } }
+    if (prev && +prev.dataset.tab >= 0) { const p = prev.getBoundingClientRect(); if (cx < p.left + p.width / 2) { const w = p.width + 8; row.insertBefore(chip, prev); base -= w; chip.style.transform = `translateX(${x - base}px) scale(1.1)`; } }
+    const rr = row.getBoundingClientRect();
+    if (x > rr.right - 40) row.scrollLeft += 12; else if (x < rr.left + 40) row.scrollLeft -= 12;
+  }, { passive: false });
+  chip.addEventListener("touchend", end); chip.addEventListener("touchcancel", end);
+  chip.addEventListener("contextmenu", e => { e.preventDefault(); if (!("ontouchstart" in window)) chipMenu(S.sectors[+chip.dataset.tab]); });
+}
+function chipMenu(sec) {
+  const i = S.sectors.indexOf(sec); if (i < 0) return;
+  const opts = ["✏️ 이름 바꾸기", "😀 이모지 바꾸기", "🗑 섹터 삭제", "＋ 새 섹터 추가"];
+  sheet(`<div class="b" style="font-size:17px">${esc(sec.emoji)} ${esc(sec.name)} <span class="sub">(${sec.stocks.length}개)</span></div><div class="sub" style="margin:4px 0 8px">팁: 칩을 꾹 누른 채 옆으로 끌면 순서가 바뀌어요</div>` +
+    opts.map((o, k) => `<div class="hit" data-cm="${k}">${o}</div>`).join(""), el => el.querySelectorAll("[data-cm]").forEach(d => d.onclick = () => {
+      closeSheet();
+      const k = +d.dataset.cm;
+      if (k === 0) renameSector(S.sectors.indexOf(sec), () => renderHome(true));
+      else if (k === 1) { const e = prompt("이모지 하나", sec.emoji); if (e?.trim()) { sec.emoji = e.trim(); S.save(); renderHome(true); } }
+      else if (k === 2) deleteSector(S.sectors.indexOf(sec), () => renderHome(true));
+      else addSector(() => renderHome(true));
+    }));
 }
 
 // ═════════════ 종목 상세 ═════════════
@@ -1161,8 +1213,8 @@ function drawer(open) {
     ${item("🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals")}${item("🟢", "매수 신호 많은 종목", "go:screener")}${item("📅", "경제 캘린더 (CPI·고용·금리 발표)", "go:econ")}${item("🐜", "서학개미·상위 1% 고수 픽", "go:crowd")}${item("📰", "뉴스·기업분석 모아보기", "go:news")}
     ${item("🇺🇸", "S&P 500 · 편입/퇴출", "go:sp500")}${item("📖", "지표 사전 (PER·PBR·EPS…)", "go:glossary")}${item("📚", "대가들의 투자법·책", "go:gurus")}<div class="divider"></div>
     <div class="grp">관리</div>${item("＋", "종목 추가 (섹터 자동 분류)", "addstock")}${item("＋", "섹터 추가", "addsec")}
-    ${t >= 0 && S.sectors[t] ? item("✏️", `'${S.sectors[t].name}' 이름 바꾸기`, "rensec") + item("🗑", `'${S.sectors[t].name}' 삭제`, "delsec") : ""}
-    ${item("🗂", "섹터 순서 바꾸기·관리", "go:sectors")}${item("↺", "기본 유망주 목록으로 초기화", "reset")}<div class="divider"></div>
+    <div class="sub" style="padding:4px 12px 8px">섹터 이름 바꾸기·삭제·순서 바꾸기는 홈 위쪽 섹터 칩을 꾹 누르세요</div>
+    ${item("↺", "기본 유망주 목록으로 초기화", "reset")}<div class="divider"></div>
     <div class="grp">설정</div>${item("🔑", "AI 뉴스 요약 설정", "go:settings", false, LS.get("gemFree", "") ? "사용 중" : "키 없음")}${item("⟳", "지금 시세 새로고침", "refresh")}
     <div class="sub" style="padding:14px 12px 0">시세·지표: Yahoo Finance · 뉴스: Google 뉴스·Yahoo<br>투자 권유가 아닌 정보 모음이에요.</div>`;
   $("#drawer").querySelectorAll("[data-act]").forEach(a => a.onclick = () => {
@@ -1271,6 +1323,20 @@ async function renderSigHistory(viewChips) {
   $("#shBody").innerHTML = h;
 }
 
+// 홈 위쪽 공지: 24시간 안의 주요 발표
+let ECON_SOON = [];
+async function loadEconSoon() {
+  const d = await data("econ.json", 600_000); if (!d?.up) return;
+  const now = Date.now(); ECON_SOON = d.up.filter(e => e.imp === "High" && e.at > now - 3600_000 && e.at < now + 86400_000);
+  if (ECON_SOON.length && route().name === "home" && H.tab !== -3) renderHome(true);
+}
+function econBannerHtml() {
+  const now = Date.now(), l = ECON_SOON.filter(e => e.at > now - 3600_000); if (!l.length) return "";
+  const t = ms => new Date(ms).toLocaleTimeString("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false });
+  return `<a class="card" href="#/econ" style="display:block;text-decoration:none;margin-top:8px;padding:10px 14px"><div class="small b" style="color:${YEL}">🔔 오늘 주요 발표</div>` +
+    l.slice(0, 4).map(e => `<div class="small" style="margin-top:3px;${e.at < now ? "color:var(--sub)" : ""}">${t(e.at)}  ${esc(e.ko)}${e.act ? ` · 실제 <b>${esc(e.act)}</b>` : ""}${e.fc ? ` · 예상 ${esc(e.fc)}` : ""}</div>`).join("") + `</a>`;
+}
+
 // ═════════════ 경제 캘린더 ═════════════
 const EC = { open: null };
 async function renderEcon() {
@@ -1293,16 +1359,18 @@ async function renderEcon() {
   }
   h += note("예상치는 전문가 평균(컨센서스)이에요. 주가는 수치 자체보다 '예상과 얼마나 다르게 나왔나'에 크게 반응해요. 출처: Forex Factory 경제 캘린더");
   h += `<div class="sec">📊 주요 지표 · 발표일에 주가는 어떻게 움직였나</div>` + note("탭하면 과거 발표마다 수치와 그날 S&P 500·나스닥 움직임이 나와요. 수치는 FRED(세인트루이스 연준) 기준 최근 약 8년치예요.");
-  const fv = (x, v) => x.unit === "천 명" ? (v >= 0 ? "+" : "") + f0(v) + "천" : x.unit === "건" ? f0(v / 1000) + "천 건" : f2(v) + "%";
+  const fv = (x, v) => x.unit === "천 명" ? (v >= 0 ? "+" : "") + f0(v) + "천" : x.unit === "건" ? f0(v / 1000) + "천 건" : f1(v) + "%";
   for (const x of d.ind || []) {
     const L = x.hist[0], open = EC.open === x.id;
+    const act = r => r.a ?? r.v, cmp = r => r.fc == null ? "" : act(r) > r.fc ? ">" : act(r) < r.fc ? "<" : "=";
+    const cc = c => c === ">" ? `style="color:${AMB}"` : c === "<" ? 'class="ac"' : 'class="muted"';
     const st = (lab, s) => s?.n ? `<div class="between small" style="padding:3px 0"><span>${lab} <span class="muted">(${s.n}번)</span></span><span>S&P 평균 <b class="${cls(s.avg)}">${pct(s.avg)}</b> · 오른 날 ${s.win}%</span></div>` : "";
     h += `<div class="card" data-econ="${x.id}"><div class="between"><b style="font-size:15px">${esc(x.name)}</b><span class="sub">다음 ${x.next ? x.next.slice(5).replace("-", "/") : "—"}</span></div>
-      ${L ? `<div class="small" style="margin-top:4px">최근 <b style="font-size:16px">${fv(x, L.v)}</b> <span class="muted">(이전 ${fv(x, L.pv)} · ${L.d.slice(5).replace("-", "/")} 발표)</span> <b class="${L.v > L.pv ? "r" : L.v < L.pv ? "g" : ""}">${L.v > L.pv ? "▲" : L.v < L.pv ? "▼" : "="}</b></div>` : ""}
+      ${L ? `<div class="small" style="margin-top:4px">최근 <b style="font-size:16px">${fv(x, act(L))}</b> ${L.fc != null ? `<b ${cc(cmp(L))} style="font-size:15px">${cmp(L)}</b> 예상 ${fv(x, L.fc)}` : `<span class="muted">(예상치 없음)</span>`} <span class="muted">· ${L.d.slice(5).replace("-", "/")} 발표</span></div>` : ""}
       <div class="sub" style="margin-top:4px;line-height:1.4">${esc(x.desc)}</div>
-      <div style="margin-top:8px">${st("이전보다 높게 나온 날", x.up)}${st("이전보다 낮게 나온 날", x.down)}${st("전체 발표일", x.all)}</div>
-      ${open ? `<table class="mini" style="margin-top:8px"><tr><th>발표일</th><th>수치</th><th>이전</th><th>S&P</th><th>나스닥</th></tr>${x.hist.slice(0, 36).map(r => `<tr><td>${r.d.slice(2).replace(/-/g, ".")}</td><td class="b">${fv(x, r.v)}</td><td class="muted">${fv(x, r.pv)}</td><td class="${cls(r.sp)}">${r.sp == null ? "—" : pct(r.sp)}</td><td class="${cls(r.nq)}">${r.nq == null ? "—" : pct(r.nq)}</td></tr>`).join("")}</table>
-        <div class="sub" style="margin-top:6px">수치는 나중에 수정된 최종값이라 발표 당일 숫자와 조금 다를 수 있어요. S&P·나스닥은 발표일 하루 등락률이에요 (미국 시간).</div>` : `<div class="small b ac" style="margin-top:6px">과거 발표 기록 보기 ▾</div>`}</div>`;
+      <div style="margin-top:8px">${st("예상보다 높게 나온 날 (>)", x.up)}${st("예상보다 낮게 나온 날 (<)", x.down)}${st("예상과 같게 나온 날 (=)", x.same)}${st("전체 발표일", x.all)}</div>
+      ${open ? `<table class="mini" style="margin-top:8px"><tr><th>발표일</th><th>실제</th><th></th><th>예상</th><th>S&P</th><th>나스닥</th></tr>${x.hist.slice(0, 36).map(r => `<tr><td>${r.d.slice(2).replace(/-/g, ".")}</td><td class="b">${fv(x, act(r))}</td><td style="text-align:center"><b ${cc(cmp(r))}>${cmp(r)}</b></td><td class="muted">${r.fc == null ? "—" : fv(x, r.fc)}</td><td class="${cls(r.sp)}">${r.sp == null ? "—" : pct(r.sp)}</td><td class="${cls(r.nq)}">${r.nq == null ? "—" : pct(r.nq)}</td></tr>`).join("")}</table>
+        <div class="sub" style="margin-top:6px">실제 = 발표 당일 처음 나온 숫자, 예상 = 전문가 평균(컨센서스). &gt; 예상보다 높음 · &lt; 낮음. S&P·나스닥은 발표일 하루 등락률이에요. 출처: Nasdaq 경제 캘린더·FRED</div>` : `<div class="small b ac" style="margin-top:6px">과거 발표 기록 보기 ▾</div>`}</div>`;
   }
   h += note("같은 방향(예: 물가가 높게 나옴)이라도 그때 시장 분위기에 따라 반응이 달라요. 평균은 참고용이고 다음 발표 결과를 보장하지 않아요.");
   $("#app").innerHTML = h;
@@ -1354,6 +1422,6 @@ async function applyIpos() {
   await Promise.all([loadCatalog(), loadStatic()]);
   if (!location.hash) { const last = LS.get("lastHash", ""); if (last && last !== "#/") { location.hash = last; return; } }
   render();
-  applyIpos().then(applyFill);
+  applyIpos().then(applyFill); loadEconSoon();
 })();
 document.addEventListener("visibilitychange", () => { if (!document.hidden && route().name === "home") refreshQuotes(false); });
