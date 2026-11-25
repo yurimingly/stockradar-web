@@ -1425,6 +1425,17 @@ function econBannerHtml() {
 // ═════════════ 경제 캘린더 ═════════════
 const EC = { open: null };
 const XV = { risk: ["🔴 위험", "var(--red)"], mid: ["🟡 중립", AMB], ok: ["🟢 괜찮음", "var(--green)"] };
+// 글에서 언급한 것 → 내 섹터(있으면) / 종목 화면 / 경제 캘린더·신호 화면
+function xTagTarget(t) {
+  if (t.s) { const i = S.sectors.findIndex(sec => sec.stocks.some(x => x.t === t.s)); return i >= 0 ? ["tab:" + i, S.sectors[i].emoji + " " + S.sectors[i].name] : ["go:s/" + encodeURIComponent(t.s), "종목"]; }
+  if (t.sec) for (const w of t.sec) { const i = S.sectors.findIndex(sec => sec.name.toLowerCase().includes(w.toLowerCase())); if (i >= 0) return ["tab:" + i, S.sectors[i].emoji + " " + S.sectors[i].name]; }
+  if (t.p) return ["go:" + t.p, t.p === "econ" ? "경제 캘린더" : "매수 신호"];
+  return null;
+}
+function xTagChip(t) {
+  const g = xTagTarget(t); if (!g) return `<span class="chip sm">${esc(t.k)}</span>`;
+  return `<span class="chip sm" data-xt="${g[0]}" style="cursor:pointer;color:var(--text)">${esc(t.k)} <span class="sub">→ ${esc(g[1])}</span></span>`;
+}
 async function renderX() {
   setHeader("🧙 미너비니 X 글", true);
   $("#app").innerHTML = `<div class="spin">불러오는 중…</div>`;
@@ -1439,9 +1450,15 @@ async function renderX() {
   for (const p of ps) h += `<div class="card" style="padding:12px 14px"><div class="between"><span class="badge" style="background:${XV[p.v][1]};font-size:11px;padding:2px 7px">${XV[p.v][0]}</span><span class="sub">${kst(p.at)}</span></div>
     <div style="margin-top:6px;line-height:1.55;font-size:14px">${esc(p.ko || p.text)}</div>
     ${p.text && p.ko ? `<details style="margin-top:6px"><summary class="sub">원문 보기</summary><div class="small muted" style="margin-top:4px;white-space:pre-wrap">${esc(p.text)}</div></details>` : ""}
-    <a class="small ac" href="${p.url}" target="_blank" rel="noopener">X에서 보기 ↗</a></div>`;
+    ${(p.tags || []).length ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">${p.tags.map(xTagChip).join("")}</div>` : ""}
+    <a class="small ac" style="display:inline-block;margin-top:8px" href="${p.url}" target="_blank" rel="noopener">X에서 보기 ↗</a></div>`;
   h += note("위험·중립·괜찮음은 글에 나온 단어(숏·조정·하락 / 돌파·매수·강세 등)로 자동 판정한 거라 참고용이에요. 투자 권유가 아니에요.");
+  h = h.replace(/<div class="spin">.*?<\/div>/, "");
   $("#app").innerHTML = h;
+  $("#app").querySelectorAll("[data-xt]").forEach(c => c.onclick = () => {
+    const [k, v] = c.dataset.xt.split(/:(.*)/);
+    if (k === "tab") { H.tab = +v; saveH(); go(""); window.scrollTo(0, 0); } else go(v);
+  });
   if (ps[0]) { LS.set("xSeen", ps[0].at); X_NEW = []; }
 }
 async function renderEcon() {

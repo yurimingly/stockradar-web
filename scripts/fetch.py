@@ -1018,6 +1018,44 @@ def ko_translate(text):
         return "".join(x[0] for x in r.json()[0] if x and x[0])
     except Exception: return ""
 
+# 글에서 언급한 것 → 누르면 갈 곳 (s: 종목, p: 앱 화면, sec: 내 섹터 이름에 들어갈 단어)
+X_TAGS = [
+    (r"\bQQQ\b|nasdaq|나스닥", {"k": "나스닥 (QQQ)", "s": "QQQ"}),
+    (r"\bSPY\b|S&P ?500|S&P", {"k": "S&P 500 (SPY)", "s": "SPY"}),
+    (r"\bIWM\b|russell|러셀|small[- ]caps?|소형주", {"k": "소형주 (IWM)", "s": "IWM"}),
+    (r"\bgold\b|\bGLD\b|금값|금 가격|금 ETF", {"k": "금 (GLD)", "s": "GLD"}),
+    (r"\bsilver\b|\bSLV\b|은값|은 가격", {"k": "은 (SLV)", "s": "SLV"}),
+    (r"\boil\b|crude|유가|원유", {"k": "원유 (USO)", "s": "USO"}),
+    (r"bitcoin|\bBTC\b|비트코인", {"k": "비트코인", "s": "BTC-USD"}),
+    (r"long[- ]term (rates|yields)|treasury|bond yields?|10-year|장기 ?금리|국채|채권", {"k": "장기 금리 (TLT)", "s": "TLT"}),
+    (r"\bCPI\b|inflation|물가|인플레", {"k": "소비자물가 (CPI)", "p": "econ"}),
+    (r"\bfed\b|fomc|powell|interest rates?|rate (hike|cut)s?|연준|금리", {"k": "연준·금리", "p": "econ"}),
+    (r"payrolls?|jobs report|unemployment|고용|실업", {"k": "고용 지표", "p": "econ"}),
+    (r"\bVIX\b|sentiment|fear|공포|분위기|심리", {"k": "공포·탐욕 (VIX)", "p": "signals"}),
+    (r"data ?cent(er|re)s?|데이터센터", {"k": "AI 데이터센터", "sec": ["데이터센터", "AI 인프라", "전력", "반도체", "AI"]}),
+    (r"semiconductor|chips?\b|반도체", {"k": "반도체", "sec": ["반도체"]}),
+    (r"\bAI\b|artificial intelligence|인공지능", {"k": "AI", "sec": ["AI"]}),
+    (r"nuclear|원전|원자력", {"k": "원자력", "sec": ["원자력", "원전", "에너지"]}),
+    (r"quantum|양자", {"k": "양자", "sec": ["양자"]}),
+]
+X_NOT_TICKER = {"AI", "CEO", "FED", "CPI", "GDP", "USA", "US", "ETF", "IPO", "FOMC", "SPX"}
+
+def x_tags(p):
+    t = (p.get("text") or "") + "\n" + (p.get("ko") or "")
+    out, seen = [], set()
+    for sym in re.findall(r"\$([A-Z]{1,5})\b", p.get("text") or ""):
+        if sym not in seen and sym not in X_NOT_TICKER: seen.add(sym); out.append({"k": "$" + sym, "s": sym})
+    for pat, tag in X_TAGS:
+        key = tag.get("s") or tag["k"]
+        if key in seen: continue
+        if re.search(pat, t, re.I):
+            seen.add(key); out.append(tag)
+    return out[:8]
+
+def x_mentioned_syms():
+    st = load(os.path.join("history/x", "markminervini.json"), None) or {}
+    return sorted({t["s"] for p in st.get("posts", [])[:40] for t in x_tags(p) if t.get("s") and not t["s"].endswith("-USD")})
+
 def do_x():
     os.makedirs(X_DIR, exist_ok=True)
     fp = os.path.join(X_DIR, X_USER + ".json")
@@ -1055,6 +1093,7 @@ def do_x():
                 st["capped"] = use["reads"] >= X_MONTH_CAP
         except Exception as e: print("x fail", e)
     st["posts"].sort(key=lambda x: -x["at"])
+    for p in st["posts"]: p["tags"] = x_tags(p)   # 저장된 글로 다시 계산 (X는 다시 안 부름)
     st["at"] = int(NOW * 1000); st["hasKey"] = bool(tok); st["cap"] = X_MONTH_CAP
     save(fp, st)
     save(path("x.json"), {k: v for k, v in st.items()})
@@ -1073,6 +1112,11 @@ def main():
         for x in ipo.get("list", []):
             if x["sym"] not in stocks: stocks[x["sym"]] = {"t": x["sym"], "ko": x["ko"], "etf": False}
     except Exception as e: print("ipo fail", e)
+    # 미너비니가 언급한 종목(QQQ·GLD 등)도 차트·지표를 미리 받아 둠 → 웹앱에서 눌러도 바로 보이게
+    try:
+        for sym in x_mentioned_syms():
+            if sym not in stocks: stocks[sym] = {"t": sym, "ko": sym, "etf": sym in ("QQQ", "SPY", "IWM", "GLD", "SLV", "USO", "TLT")}
+    except Exception as e: print("x syms fail", e)
     try:
         fill = do_fill(cat)
         for lst in fill.get("sectors", {}).values():
