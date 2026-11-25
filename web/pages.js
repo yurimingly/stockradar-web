@@ -1203,20 +1203,15 @@ function resetAll() {
 // ═════════════ 메뉴 · 화면 이동 ═════════════
 // 메뉴의 섹터 줄 꾹 누르기: 그대로 떼면 메뉴(이름·이모지·삭제), 누른 채 위아래로 끌면 순서 바꾸기
 const DR_DRAG = { justDragged: false };
-function drawerDrag(row) {
-  const box = $("#drSecs");
+// 메뉴 줄 공통 꾹 누르기: 그대로 떼면 onMenu(row), 누른 채 위아래로 끌면 같은 묶음(box) 안에서 순서 바꾸고 onDrop(rows)
+function rowDrag(row, box, onMenu, onDrop) {
   let timer, dragging = false, moved = false, startY = 0, base = 0;
   const end = () => {
     clearTimeout(timer);
     if (!dragging) return;
     dragging = false; row.classList.remove("lift"); row.style.transform = "";
     DR_DRAG.justDragged = true; setTimeout(() => DR_DRAG.justDragged = false, 350);
-    const sec = S.sectors[+row.dataset.si];
-    if (!moved) { chipMenu(sec); return; }
-    const cur = H.tab >= 0 ? S.sectors[H.tab] : null;
-    const order = [...box.querySelectorAll(".drsec")].map(r => S.sectors[+r.dataset.si]);
-    if (order.length === S.sectors.length) { S.sectors = order; if (cur) H.tab = S.sectors.indexOf(cur); S.save(); saveH(); }
-    drawer(true); if (route().name === "home") renderHome(true);
+    if (!moved) onMenu(row); else onDrop([...box.children].filter(r => r.classList.contains("drsec")));
   };
   row.addEventListener("touchstart", e => {
     startY = base = e.touches[0].clientY; moved = false;
@@ -1233,27 +1228,65 @@ function drawerDrag(row) {
     if (prev) { const p = prev.getBoundingClientRect(); if (cy < p.top + p.height / 2) { box.insertBefore(row, prev); base -= p.height; row.style.transform = `translateY(${y - base}px)`; } }
   }, { passive: false });
   row.addEventListener("touchend", end); row.addEventListener("touchcancel", end);
-  row.addEventListener("contextmenu", e => { e.preventDefault(); if (!("ontouchstart" in window)) chipMenu(S.sectors[+row.dataset.si]); });
+  row.addEventListener("contextmenu", e => { e.preventDefault(); if (!("ontouchstart" in window)) onMenu(row); });
+}
+function drawerDrag(row) {
+  const box = $("#drSecs");
+  rowDrag(row, box, r => chipMenu(S.sectors[+r.dataset.si]), rows => {
+    const cur = H.tab >= 0 ? S.sectors[H.tab] : null;
+    const order = rows.map(r => S.sectors[+r.dataset.si]);
+    if (order.length === S.sectors.length) { S.sectors = order; if (cur) H.tab = S.sectors.indexOf(cur); S.save(); saveH(); }
+    drawer(true); if (route().name === "home") renderHome(true);
+  });
+}
+// 공부하기 메뉴: 순서·숨김을 기기에 저장
+const STUDY = t => ({
+  compare: ["⚖️", "종목 비교 (PER·PBR·성장률…)", "go:compare/" + (t >= 0 ? t : -2) + "/0"],
+  discover: ["🔭", "종목 발굴 (화제·스크리너·전문가)", "go:discover"],
+  signals: ["🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals"],
+  screener: ["🟢", "매수 신호 많은 종목", "go:screener"],
+  econ: ["📅", "경제 캘린더 (CPI·고용·금리 발표)", "go:econ"],
+  crowd: ["🐜", "서학개미·상위 1% 고수 픽", "go:crowd"],
+  news: ["📰", "뉴스·기업분석 모아보기", "go:news"],
+  sp500: ["🇺🇸", "S&P 500 · 편입/퇴출", "go:sp500"],
+  glossary: ["📖", "지표 사전 (PER·PBR·EPS…)", "go:glossary"],
+  gurus: ["📚", "대가들의 투자법·책", "go:gurus"],
+});
+function studyOrder(all) { const saved = LS.get("studyOrder", []).filter(k => k in all); return saved.concat(Object.keys(all).filter(k => !saved.includes(k))); }
+function studyMenu(row) {
+  const k = row.dataset.sk, [icon, label] = STUDY(H.tab)[k];
+  sheet(`<div class="b" style="font-size:17px">${icon} ${esc(label)}</div><div class="sub" style="margin:4px 0 8px">팁: 꾹 누른 채 위아래로 끌면 순서가 바뀌어요</div><div class="hit" data-sm="hide">🙈 메뉴에서 숨기기</div><div class="hit" data-sm="close">닫기</div>`,
+    el => el.querySelectorAll("[data-sm]").forEach(d => d.onclick = () => {
+      closeSheet();
+      if (d.dataset.sm === "hide") { const h = new Set(LS.get("studyHidden", [])); h.add(k); LS.set("studyHidden", [...h]); drawer(true); toast("숨겼어요. 맨 아래 '숨긴 메뉴'에서 다시 꺼낼 수 있어요"); }
+    }));
+}
+function studyUnhide() {
+  const all = STUDY(H.tab), hid = studyOrder(all).filter(k => LS.get("studyHidden", []).includes(k));
+  sheet(`<div class="b" style="font-size:17px">다시 보일 메뉴</div>` + hid.map(k => `<div class="hit" data-uh="${k}">${all[k][0]} ${esc(all[k][1])}</div>`).join(""),
+    el => el.querySelectorAll("[data-uh]").forEach(d => d.onclick = () => {
+      closeSheet(); LS.set("studyHidden", LS.get("studyHidden", []).filter(x => x !== d.dataset.uh)); drawer(true);
+    }));
 }
 function drawer(open) {
   $("#drawer").classList.toggle("hidden", !open); $("#drawerBg").classList.toggle("hidden", !open);
   if (!open) return;
   const r = route(), home = r.name === "home";
   const item = (icon, label, act, sel, sub) => `<a class="item row" data-act="${act}" style="${sel ? "background:var(--card2)" : ""}"><span style="width:30px;font-size:17px">${icon}</span><span class="grow ${sel ? "ac b" : ""}">${esc(label)}</span>${sub != null ? `<span class="sub">${sub}</span>` : ""}</a>`;
-  const t = H.tab;
+  const t = H.tab, hidden = LS.get("studyHidden", []).filter(k => k in STUDY(t));
   $("#drawer").innerHTML = `<div class="b" style="font-size:22px;padding:0 12px">StockRadar</div><div class="sub" style="padding:2px 12px 6px">${Q._at ? "시세 " + ago(Q._at) + " 기준" : ""}</div>
     <div class="grp">보기</div>${item("★", "관심 종목", "tab:-2", home && t === -2, S.favs.size)}${item("🧠", "대가별 종목 순위", "tab:-3", home && t === -3, STATIC.gurus.length + "명")}${item("📋", "전체 종목", "tab:-1", home && t === -1)}
     <div id="drSecs">${S.sectors.map((s, i) => item(s.emoji, s.name, "tab:" + i, home && t === i, s.stocks.length).replace('<a class="item row"', `<a class="item row drsec" data-si="${i}"`)).join("")}</div>
     <div class="sub" style="padding:2px 12px 6px">섹터를 꾹 누르면 이름 바꾸기·삭제, 꾹 누른 채 위아래로 끌면 순서 바꾸기</div><div class="divider"></div>
-    <div class="grp">공부하기</div>${item("⚖️", "종목 비교 (PER·PBR·성장률…)", "go:compare/" + (t >= 0 ? t : -2) + "/0")}${item("🔭", "종목 발굴 (화제·스크리너·전문가)", "go:discover")}
-    ${item("🚦", "매수 타이밍 신호 (공포지수·VIX·RSI)", "go:signals")}${item("🟢", "매수 신호 많은 종목", "go:screener")}${item("📅", "경제 캘린더 (CPI·고용·금리 발표)", "go:econ")}${item("🐜", "서학개미·상위 1% 고수 픽", "go:crowd")}${item("📰", "뉴스·기업분석 모아보기", "go:news")}
-    ${item("🇺🇸", "S&P 500 · 편입/퇴출", "go:sp500")}${item("📖", "지표 사전 (PER·PBR·EPS…)", "go:glossary")}${item("📚", "대가들의 투자법·책", "go:gurus")}<div class="divider"></div>
+    <div class="grp">공부하기</div><div id="drStudy">${studyOrder(STUDY(t)).filter(k => !hidden.includes(k)).map(k => { const [ic, lb, act] = STUDY(t)[k]; return item(ic, lb, act).replace('<a class="item row"', `<a class="item row drsec" data-sk="${k}"`); }).join("")}</div>
+    ${hidden.length ? item("🙈", `숨긴 메뉴 ${hidden.length}개 다시 보이기`, "unhide") : ""}
+    <div class="sub" style="padding:2px 12px 6px">메뉴를 꾹 누르면 숨기기, 꾹 누른 채 위아래로 끌면 순서 바꾸기</div><div class="divider"></div>
     <div class="grp">관리</div>${item("＋", "종목 추가 (섹터 자동 분류)", "addstock")}${item("＋", "섹터 추가", "addsec")}
-    <div class="sub" style="padding:4px 12px 8px">섹터 이름 바꾸기·삭제·순서 바꾸기는 홈 위쪽 섹터 칩을 꾹 누르세요</div>
     ${item("↺", "기본 유망주 목록으로 초기화", "reset")}<div class="divider"></div>
     <div class="grp">설정</div>${item("🔑", "AI 뉴스 요약 설정", "go:settings", false, LS.get("gemFree", "") ? "사용 중" : "키 없음")}${item("⟳", "지금 시세 새로고침", "refresh")}
     <div class="sub" style="padding:14px 12px 0">시세·지표: Yahoo Finance · 뉴스: Google 뉴스·Yahoo<br>투자 권유가 아닌 정보 모음이에요.</div>`;
-  $("#drawer").querySelectorAll(".drsec").forEach(drawerDrag);
+  $("#drSecs").querySelectorAll(".drsec").forEach(drawerDrag);
+  $("#drStudy").querySelectorAll(".drsec").forEach(r => rowDrag(r, $("#drStudy"), studyMenu, rows => { LS.set("studyOrder", rows.map(x => x.dataset.sk).concat(LS.get("studyHidden", []))); drawer(true); }));
   $("#drawer").querySelectorAll("[data-act]").forEach(a => a.onclick = () => {
     if (DR_DRAG.justDragged) return;
     drawer(false); const [k, v] = a.dataset.act.split(/:(.*)/);
@@ -1264,6 +1297,7 @@ function drawer(open) {
     else if (k === "rensec") renameSector(H.tab);
     else if (k === "delsec") deleteSector(H.tab);
     else if (k === "reset") resetAll();
+    else if (k === "unhide") { drawer(true); studyUnhide(); }
     else if (k === "refresh") { quotesAt = 0; _dc.clear(); render(true); toast("새로고침"); }
   });
 }
