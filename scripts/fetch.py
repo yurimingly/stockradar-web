@@ -741,12 +741,16 @@ def ff_week(which):
     except Exception: return []
 
 def debug_investing():
-    for eid in [733, 736, 56, 69, 227, 300, 238, 734, 735, 61, 905, 906, 375, 256, 294]:
-        r = get(f"https://sbcharts.investing.com/events_charts/us/{eid}.json")
+    hdr = {"User-Agent": UA, "Accept": "application/json, text/plain, */*", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
+    for d in ["2026-11-10", "2026-11-06", "2022-06-10", "2019-03-12"]:
+        r = get(f"https://api.nasdaq.com/api/calendar/economicevents?date={d}", headers=hdr)
         try:
-            j = r.json(); a = j.get("attr") or []
-            print("INV", eid, r.status_code, list(j)[:5], len(a), a[-1] if a else None, j.get("data", [])[-1:] if isinstance(j.get("data"), list) else "")
-        except Exception as e: print("INV", eid, r.status_code if r else None, (r.text[:120] if r else ""), e)
+            rows = r.json()["data"]["rows"]
+            print("NQ", d, len(rows), [x for x in rows if x.get("country") in ("United States", "US", "USA")][:4] or rows[:2])
+        except Exception as e: print("NQ", d, r.status_code if r is not None else None, (r.text[:200] if r is not None else ""), e)
+    for w in ["lastweek", "thisweek"]:
+        r = get(f"https://nfs.faireconomy.media/ff_calendar_{w}.json")
+        print("FF", w, r.status_code if r is not None else None, (r.text[:300] if r is not None else ""))
 
 def do_econ():
     debug_investing()
